@@ -1,0 +1,104 @@
+{
+  // Editor Settings
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  },
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.detectIndentation": false,
+  "editor.rulers": [80, 100],
+  "editor.wordWrap": "bounded",
+  "editor.minimap.enabled": false,
+
+  // TypeScript Settings
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "typescript.suggest.autoImports": true,
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  "typescript.preferences.includePackageJsonAutoImports": "auto",
+
+  // React Settings
+  "emmet.includeLanguages": {
+    "typescript": "typescriptreact",
+    "typescriptreact": "html"
+  },
+
+  // File Associations
+  "files.associations": {
+    "*.tsx": "typescriptreact"
+  },
+
+  // Search Settings
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.git": true,
+    "**/yarn.lock": true
+  },
+
+  // Explorer Settings
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.patterns": {
+    "*.ts": "${capture}.js",
+    "*.js": "${capture}.js.map, ${capture}.min.js, ${capture}.d.ts",
+    "*.jsx": "${capture}.js",
+    "*.tsx": "${capture}.ts",
+    "tsconfig.json": "tsconfig.*.json",
+    "package.json": "yarn.lock, package-lock.json, pnpm-lock.yaml, bun.lockb"
+  },
+
+  // Terminal Settings
+  "terminal.integrated.defaultProfile.osx": "zsh",
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+
+  // Git Settings
+  "git.enableSmartCommit": true,
+  "git.confirmSync": false,
+  "git.autofetch": true,
+
+  // ESLint Settings
+  "eslint.validate": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact"
+  ],
+  "eslint.workingDirectories": ["."],
+
+  // Prettier Settings
+  "prettier.singleQuote": true,
+  "prettier.trailingComma": "es5",
+  "prettier.printWidth": 80,
+  "prettier.semi": true,
+  "prettier.requireConfig": true,
+  "prettier.useEditorConfig": false,
+
+  // Auto Save
+  "files.autoSave": "onFocusChange",
+
+  // Bracket Pair Colorization
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+
+  // Indent Guides
+  "editor.guides.indentation": true,
+
+  // Line Numbers
+  "editor.lineNumbers": "on",
+  "editor.renderLineHighlight": "all",
+
+  // Minimap
+  "editor.minimap.enabled": false,
+
+  // Smooth Scrolling
+  "editor.smoothScrolling": true,
+
+  // Word Wrap
+  "editor.wordWrap": "bounded",
+  "editor.wordWrapColumn": 100
+}
