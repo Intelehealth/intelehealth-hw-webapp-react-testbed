@@ -1,9 +1,20 @@
 import react from '@vitejs/plugin-react';
+import { visualizer } from 'rollup-plugin-visualizer';
 import { defineConfig } from 'vite';
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    react(),
+    // Bundle analyzer for production builds
+    mode === 'analyze' &&
+      visualizer({
+        filename: 'dist/stats.html',
+        open: true,
+        gzipSize: true,
+        brotliSize: true,
+      }),
+  ].filter(Boolean),
 
   // Build optimizations
   build: {
@@ -38,4 +49,4 @@ export default defineConfig({
     include: ['react', 'react-dom'],
     exclude: ['@sentry/react', '@sentry/tracing'],
   },
-});
+}));

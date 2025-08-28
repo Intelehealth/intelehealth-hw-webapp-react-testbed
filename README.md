@@ -76,6 +76,7 @@ This project includes VS Code workspace settings to ensure consistent developmen
 - `yarn format` - Format code with Prettier
 - `yarn format:check` - Check code formatting
 - `yarn preview` - Preview production build locally
+- `yarn analyze` - Analyze bundle size and composition (generates visual report)
 
 ### Testing Scripts
 
@@ -90,26 +91,92 @@ This project includes VS Code workspace settings to ensure consistent developmen
 - **Development**: http://localhost:3000 (optimized port)
 - **Production**: [To be configured]
 
+## 🔧 Environment Configuration
+
+Create a `.env` file based on `.env.example`:
+
+```bash
+# Development
+VITE_API_URL=http://localhost:3000
+VITE_APP_ENV=development
+
+# Production
+VITE_API_URL=https://api.production.com
+VITE_SENTRY_DSN=your_production_dsn
+VITE_APP_ENV=production
+```
+
+**Environment Variables:**
+
+- `VITE_API_URL` - Backend API endpoint
+- `VITE_SENTRY_DSN` - Sentry error tracking DSN (production only)
+- `VITE_APP_ENV` - Application environment (development/staging/production)
+
+**Note:** `VITE_SENTRY_DSN` is only required in production. Sentry is automatically disabled in development for better performance.
+
 ## 📁 Project Structure
 
 ```
 ih-hw-webapp/
 ├── src/
-│   ├── App.tsx          # Main application component (optimized with memo)
-│   ├── main.tsx         # Application entry point
-│   ├── App.css          # Main application styles
-│   ├── assets/          # Static assets
-│   ├── config/          # Configuration files
-│   ├── utils/           # Utility functions
-│   └── test/            # Test utilities and setup
-├── public/               # Public assets
-├── .vscode/             # VS Code workspace settings
-├── package.json          # Dependencies and scripts
-├── vite.config.ts        # Vite configuration (optimized)
-├── tsconfig.app.json     # TypeScript config (performance optimized)
-├── vitest.config.ts      # Vitest configuration
-├── env.example           # Environment variables template
-└── README.md            # This file
+│   ├── App.tsx                    # Main application component (optimized with memo)
+│   ├── main.tsx                   # Application entry point
+│   ├── App.css                    # Main application styles
+│   ├── assets/                    # Static assets
+│   ├── config/                    # Configuration files
+│   ├── services/                  # HTTP and API services
+│   ├── hooks/                     # Custom React hooks
+│   ├── utils/                     # Utility functions (storage, etc.)
+│   ├── test/                      # Test utilities and setup
+│   └── modules/                   # Feature-based modules
+│       ├── auth/                  # Authentication module
+│       │   ├── login.component.ts # Login component
+│       │   ├── auth.service.ts    # Authentication service
+│       │   ├── auth.hook.ts       # Authentication hooks
+│       │   └── auth.types.ts      # Authentication type definitions
+│       ├── dashboard/             # Dashboard module
+│       │   ├── dashboard.component.ts # Dashboard component
+│       │   ├── dashboard.service.ts    # Dashboard service
+│       │   └── dashboard.hook.ts       # Dashboard hooks
+│       └── patients/              # Patients module
+│           ├── patient-list.component.ts # Patient list component
+│           ├── patient.service.ts        # Patient service
+│           └── patient.hook.ts           # Patient hooks
+├── public/                        # Public assets
+├── .vscode/                       # VS Code workspace settings
+├── package.json                   # Dependencies and scripts
+├── vite.config.ts                 # Vite configuration (optimized)
+├── tsconfig.app.json              # TypeScript config (performance optimized)
+├── vitest.config.ts               # Vitest configuration
+├── env.example                    # Environment variables template
+└── README.md                     # This file
+```
+
+### 📝 File Naming Convention
+
+The project follows a consistent naming convention for different file types:
+
+- **Components**: `.component.ts` (e.g., `login.component.ts`, `dashboard.component.ts`)
+- **Services**: `.service.ts` (e.g., `auth.service.ts`, `patient.service.ts`)
+- **Hooks**: `.hook.ts` (e.g., `auth.hook.ts`, `patient.hook.ts`)
+- **Types**: `.types.ts` (e.g., `auth.types.ts`, `patient.types.ts`)
+- **Utilities**: `.util.ts` (e.g., `storage.util.ts`, `validation.util.ts`)
+- **Constants**: `.constant.ts` (e.g., `api.constant.ts`, `routes.constant.ts`)
+
+### 🏗️ Module Structure
+
+Each module follows a consistent structure:
+
+```
+modules/
+└── [feature-name]/
+    ├── [feature-name].component.ts    # Main component
+    ├── [feature-name].service.ts      # Business logic
+    ├── [feature-name].hook.ts         # Custom hooks
+    ├── [feature-name].types.ts        # Type definitions
+    ├── [feature-name].constant.ts     # Module constants
+    ├── [feature-name].util.ts         # Module utilities
+    └── [feature-name].test.ts         # Module tests
 ```
 
 ## 🚀 Build Optimizations
@@ -162,6 +229,35 @@ yarn test:watch
 - **Integration Tests**: API and state management
 - **E2E Tests**: [Future implementation]
 
+### Test Examples
+
+```typescript
+// Example test structure for components
+import { render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import LoginComponent from './login.component';
+
+describe('Login Component', () => {
+  it('should render login form', () => {
+    render(<LoginComponent />);
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
+  });
+
+  it('should handle form submission', async () => {
+    // Test implementation
+  });
+});
+
+// Example test structure for services
+describe('Auth Service', () => {
+  it('should authenticate user with valid credentials', async () => {
+    // Test implementation
+  });
+});
+```
+
 ## 🔒 Code Quality
 
 ### ESLint Rules
@@ -170,6 +266,64 @@ yarn test:watch
 - **TypeScript Strict**: Full type safety
 - **React Best Practices**: Hooks and component rules
 - **Prettier Integration**: Consistent formatting
+
+### Web API Usage
+
+**⚠️ IMPORTANT: Never use web APIs directly in your code!**
+
+Always use the utility functions and services provided by the project. This includes but is not limited to:
+
+- **localStorage/sessionStorage** - Use storage utilities
+- **fetch/XMLHttpRequest** - Use HTTP service
+- **cookies** - Use cookie utilities
+- **IndexedDB** - Use database utilities
+- **WebSocket** - Use WebSocket service
+- **File API** - Use file handling utilities
+- **Geolocation API** - Use location service
+- **Notification API** - Use notification service
+
+**Storage Management Example:**
+
+Always use the storage utility functions from `src/utils/storage.ts`:
+
+```typescript
+// ❌ WRONG - Don't do this
+localStorage.setItem('auth_token', token);
+const token = localStorage.getItem('auth_token');
+sessionStorage.setItem('user_data', JSON.stringify(user));
+
+// ✅ CORRECT - Use storage utility
+import { storage } from '../utils/storage';
+storage.setAuthToken(token);
+const token = storage.getAuthToken();
+storage.setUserData(user);
+```
+
+**HTTP Requests Example:**
+
+```typescript
+// ❌ WRONG - Don't do this
+fetch('/api/users')
+  .then(response => response.json())
+  .then(data => console.log(data));
+
+// ✅ CORRECT - Use HTTP service
+import { useHttp } from '../hooks/useHttp';
+const { get, data, loading, error } = useHttp();
+await get('/api/users');
+```
+
+**Available Storage Functions:**
+
+- `storage.getAuthToken()` - Get authentication token
+- `storage.setAuthToken(token)` - Set authentication token
+- `storage.clearAuthToken()` - Clear all auth tokens
+- `storage.get(key)` - Generic getter
+- `storage.set(key, value)` - Generic setter
+- `storage.remove(key)` - Remove specific key
+- `storage.clear()` - Clear all storage
+- `storage.setUserData(user)` - Set user data
+- `storage.getUserData()` - Get user data
 
 ### Prettier Configuration
 
@@ -186,6 +340,58 @@ yarn test:watch
 - **Memo**: Used for expensive components
 - **useCallback**: Prevents unnecessary re-renders
 - **Bundle Analysis**: Regular bundle size monitoring
+
+### Mobile-First Design Principles
+
+Since this app is for health workers who may use tablets and mobile devices:
+
+- **Responsive Design**: Mobile-first approach with progressive enhancement
+- **Touch-Friendly**: Minimum 44px touch targets for buttons and interactive elements
+- **Gesture Support**: Swipe gestures for navigation and actions
+- **Fast Loading**: Optimized for slower network conditions in rural areas
+
+### HTTP Service & Hooks
+
+The project includes a centralized HTTP service with custom hooks for API calls:
+
+**HTTP Service (`src/services/http.ts`):**
+
+- Axios-based with interceptors
+- Automatic auth token handling
+- Error handling for 401 responses
+- TypeScript support
+
+**Custom Hooks (`src/hooks/useHttp.ts`):**
+
+- `useHttp<T>()` - General HTTP operations with loading/error states
+- Built-in state management for requests
+- Type-safe API calls
+
+**API Service (`src/services/api.ts`):**
+
+- Predefined endpoints for common operations
+- Simple function-based approach
+- No complex class hierarchies
+
+**Usage Example:**
+
+```typescript
+import { useHttp } from '../hooks/useHttp';
+import { apiService } from '../services/api';
+
+function MyComponent() {
+  const { get, data, loading, error } = useHttp();
+
+  const fetchData = async () => {
+    await get('/api/endpoint');
+  };
+
+  // Or use predefined API functions
+  const handleLogin = async () => {
+    await apiService.login({ email, password });
+  };
+}
+```
 
 ### Build Optimization
 
@@ -217,6 +423,69 @@ yarn test:watch
 2. **Performance**: Bundle size limits enforced
 3. **Type Safety**: Strict TypeScript configuration
 4. **Formatting**: Prettier + ESLint auto-fix
+
+## 🚀 Deployment & CI/CD
+
+### Deployment Checklist
+
+Before deploying to production, ensure:
+
+- [ ] Environment variables configured
+- [ ] Build optimization enabled
+- [ ] Performance monitoring active
+- [ ] Bundle size within limits
+- [ ] All tests passing (100% coverage)
+
+### Build Optimization
+
+```bash
+# Production build
+yarn build
+
+# Bundle analysis (generates dist/stats.html)
+yarn analyze
+
+# Verify bundle size
+ls -la dist/assets/
+```
+
+**Bundle Analysis Features:**
+
+- **Visual Report**: Opens `dist/stats.html` in browser automatically
+- **Gzip & Brotli**: Shows compressed sizes for optimization
+- **Chunk Breakdown**: Detailed view of vendor vs. app code
+- **Size Tracking**: Monitor bundle growth over time
+
+### Performance Monitoring
+
+- **Core Web Vitals**: LCP, FID, CLS monitoring
+- **Bundle Size**: Regular analysis and optimization
+- **Error Tracking**: Sentry integration for production errors
+- **User Experience**: Real User Monitoring (RUM)
+
+### Security Audit
+
+Before deployment, complete security checks:
+
+```bash
+# Dependency security audit
+yarn audit
+
+# Check for known vulnerabilities
+npm audit
+
+# Review environment variables
+grep -r "VITE_" .env*
+
+# Verify no hardcoded secrets
+grep -r "password\|secret\|key" src/ --exclude="*.test.*"
+```
+
+**Security Checklist:**
+
+- [ ] No hardcoded API keys or secrets
+- [ ] Environment variables properly configured
+- [ ] Dependencies updated and secure
 
 ### Pull Request Requirements
 
