@@ -10,14 +10,8 @@ A modern, high-performance web application built for health workers, providing a
 - **Language**: TypeScript (strict mode enabled)
 - **Styling**: CSS with modern design principles
 - **Testing**: Vitest + React Testing Library (100% coverage required)
-
-## ⚡ Performance Features
-
-- **Code Splitting**: Vendor chunks separated
-- **Bundle Optimization**: ESBuild minification with ES2020 target
-- **TypeScript Incremental Builds**: Faster compilation
-- **Optimized Dependencies**: Selective dependency optimization
-- **Production Build**: Optimized for minimal bundle size
+- **State Management**: React useReducer with centralized reducers
+- **Code Quality**: ESLint + Prettier + Husky pre-commit hooks
 
 ## 🛠️ Development Setup
 
@@ -41,32 +35,6 @@ yarn install
 yarn dev
 ```
 
-### VS Code Setup (Recommended)
-
-This project includes VS Code workspace settings to ensure consistent development experience across all team members.
-
-1. **Install VS Code Extensions**: When you open the project in VS Code, you'll be prompted to install recommended extensions. Click "Install All" to get:
-   - Prettier (Code formatter)
-   - ESLint (Linting)
-   - TypeScript support
-   - Auto Rename Tag
-   - Path Intellisense
-   - And more...
-
-2. **Workspace Settings**: The project includes `.vscode/settings.json` with:
-   - Auto-formatting on save
-   - ESLint auto-fix on save
-   - Consistent code formatting rules
-   - TypeScript preferences
-   - File nesting patterns
-   - Git integration settings
-
-3. **Benefits**:
-   - Consistent code style across the team
-   - Automatic formatting and linting
-   - Better TypeScript support
-   - Improved development workflow
-
 ### Available Scripts
 
 - `yarn dev` - Start development server with hot reload
@@ -77,6 +45,8 @@ This project includes VS Code workspace settings to ensure consistent developmen
 - `yarn format:check` - Check code formatting
 - `yarn preview` - Preview production build locally
 - `yarn analyze` - Analyze bundle size and composition (generates visual report)
+- `yarn type-check` - Run TypeScript type checking
+- `yarn pre-commit` - Run all pre-commit checks manually (formatting, linting, type-check, tests, build)
 
 ### Testing Scripts
 
@@ -85,6 +55,25 @@ This project includes VS Code workspace settings to ensure consistent developmen
 - `yarn test:run` - Run tests once
 - `yarn test:coverage` - Run tests with coverage report (100% required)
 - `yarn test:watch` - Run tests in watch mode
+
+### Git Hooks & Quality Assurance
+
+This project uses **Husky** to enforce code quality standards before each commit. The pre-commit hook automatically runs:
+
+1. **Code Formatting & Linting** - Formats and lints staged files using ESLint and Prettier
+2. **Type Checking** - Runs TypeScript type checking (`yarn type-check`)
+3. **Tests** - Executes all tests (`yarn test:run`)
+4. **Build Verification** - Ensures the project builds successfully (`yarn build`)
+
+**Benefits:**
+
+- ✅ Prevents broken code from being committed
+- ✅ Ensures consistent code style
+- ✅ Catches type errors early
+- ✅ Maintains test coverage
+- ✅ Guarantees build success
+
+**Note:** All checks must pass before a commit is allowed. If any check fails, the commit will be blocked until issues are resolved.
 
 ## 🌐 Access
 
@@ -123,6 +112,7 @@ ih-hw-webapp/
 │   ├── main.tsx                   # Application entry point
 │   ├── App.css                    # Main application styles
 │   ├── assets/                    # Static assets
+│   ├── components/                # Reusable UI components
 │   ├── config/                    # Configuration files
 │   ├── services/                  # HTTP and API services
 │   ├── hooks/                     # Custom React hooks
@@ -134,22 +124,11 @@ ih-hw-webapp/
 │   │   ├── http-examples.tsx      # HTTP service usage examples
 │   │   ├── redux-concepts.tsx     # Redux-like state management
 │   │   ├── api-examples.tsx       # API service usage examples
-│   │   └── index.ts               # Examples exports
-│   └── modules/                   # Feature-based modules
-│       ├── auth/                  # Authentication module
-│       │   ├── login.component.ts # Login component
-│       │   ├── auth.service.ts    # Authentication service
-│       │   ├── auth.hook.ts       # Authentication hooks
-│       │   └── auth.types.ts      # Authentication type definitions
-│       ├── dashboard/             # Dashboard module
-│       │   ├── dashboard.component.ts # Dashboard component
-│       │   ├── dashboard.service.ts    # Dashboard service
-│       │   └── dashboard.hook.ts       # Dashboard hooks
-│       └── patients/              # Patients module
-│           ├── patient-list.component.ts # Patient list component
-│           ├── patient.service.ts        # Patient service
-│           └── patient.hook.ts           # Patient hooks
+│   │   ├── index.ts               # Examples exports
+│   │   └── CODING_GUIDELINES.md   # Project coding standards
+│   └── modules/                   # Feature-based modules (future use)
 ├── public/                        # Public assets
+├── .husky/                        # Git hooks for quality assurance
 ├── .vscode/                       # VS Code workspace settings
 ├── package.json                   # Dependencies and scripts
 ├── vite.config.ts                 # Vite configuration (optimized)
@@ -181,41 +160,65 @@ The project follows a consistent naming convention for different file types:
 
 ### 🏗️ Module Structure
 
-Each module follows a consistent structure:
+Each module follows a consistent structure and can include sub-modules for complex features:
 
 ```
 modules/
-└── [feature-name]/
-    ├── [feature-name].component.ts    # Main component
-    ├── [feature-name].service.ts      # Business logic
-    ├── [feature-name].hook.ts         # Custom hooks
-    ├── [feature-name].types.ts        # Type definitions
-    ├── [feature-name].constant.ts     # Module constants
-    ├── [feature-name].util.ts         # Module utilities
-    └── [feature-name].test.ts         # Module tests
+├── [feature-name]/                    # Main feature module
+│   ├── [feature-name].component.ts    # Main component
+│   ├── [feature-name].service.ts      # Business logic
+│   ├── [feature-name].hook.ts         # Custom hooks
+│   ├── [feature-name].types.ts        # Type definitions
+│   ├── [feature-name].constant.ts     # Module constants
+│   ├── [feature-name].util.ts         # Module utilities
+│   ├── [feature-name].test.ts         # Module tests
+│   └── [sub-feature]/                 # Sub-module for complex features
+│       ├── [sub-feature].component.ts # Sub-feature component
+│       ├── [sub-feature].service.ts   # Sub-feature service
+│       ├── [sub-feature].hook.ts      # Sub-feature hooks
+│       └── [sub-feature].types.ts     # Sub-feature types
+└── [another-feature]/                 # Another main feature
+    ├── [another-feature].component.ts
+    ├── [another-feature].service.ts
+    └── [another-feature].types.ts
+```
+
+**Example Structure:**
+
+```
+modules/
+├── auth/                              # Authentication module
+│   ├── auth.component.ts              # Main auth component
+│   ├── auth.service.ts                # Auth service
+│   ├── auth.hook.ts                   # Auth hooks
+│   ├── auth.types.ts                  # Auth types
+│   ├── login/                         # Login sub-module
+│   │   ├── login.component.ts         # Login component
+│   │   ├── login.service.ts           # Login service
+│   │   └── login.types.ts             # Login types
+│   └── register/                      # Register sub-module
+│       ├── register.component.ts      # Register component
+│       └── register.service.ts        # Register service
+└── patients/                          # Patients module
+    ├── patients.component.ts          # Main patients component
+    ├── patients.service.ts            # Patients service
+    ├── patients.types.ts              # Patients types
+    ├── list/                          # Patient list sub-module
+    │   ├── patient-list.component.ts  # List component
+    │   └── patient-list.hook.ts       # List hooks
+    └── details/                       # Patient details sub-module
+        ├── patient-details.component.ts # Details component
+        └── patient-details.service.ts   # Details service
 ```
 
 ## 🚀 Build Optimizations
 
-### Vite Configuration
-
 - **Target**: ES2020 for modern browsers
 - **Minification**: ESBuild with aggressive optimization
-- **Code Splitting**: Vendor chunks
+- **Code Splitting**: Vendor chunks separated
 - **Source Maps**: Disabled in production
-- **Dependency Optimization**: Selective include/exclude
-
-### TypeScript Configuration
-
-- **Incremental Builds**: Faster compilation
-- **Strict Mode**: Full type safety
-- **Build Info**: Optimized build caching
-- **Performance**: Optimized for development speed
-
-### Performance Features
-
-- **Memoized Components**: React performance optimization
-- **Bundle Analysis**: Chunk size warnings and limits
+- **TypeScript**: Incremental builds with strict mode
+- **Bundle Analysis**: Visual reports with `yarn analyze`
 
 ## 🧪 Testing
 
@@ -244,35 +247,6 @@ yarn test:watch
 - **Unit Tests**: Component and utility testing
 - **Integration Tests**: API and state management
 - **E2E Tests**: [Future implementation]
-
-### Test Examples
-
-```typescript
-// Example test structure for components
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
-import LoginComponent from './login.component';
-
-describe('Login Component', () => {
-  it('should render login form', () => {
-    render(<LoginComponent />);
-    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
-  });
-
-  it('should handle form submission', async () => {
-    // Test implementation
-  });
-});
-
-// Example test structure for services
-describe('Auth Service', () => {
-  it('should authenticate user with valid credentials', async () => {
-    // Test implementation
-  });
-});
-```
 
 ## 🔒 Code Quality
 
@@ -409,36 +383,19 @@ function MyComponent() {
 }
 ```
 
-### Build Optimization
-
-- **Tree Shaking**: Unused code elimination
-- **Minification**: Aggressive code compression
-- **Chunk Splitting**: Optimal bundle distribution
-- **Dependency Optimization**: Selective bundling
-
 ## 📈 Monitoring & Analytics
 
-### Development Tools
-
-- **Hot Module Replacement**: Instant updates
-- **Bundle Analyzer**: Size optimization
-- **TypeScript**: Real-time type checking
-- **ESLint**: Code quality monitoring
-
-### Production Monitoring
-
-- **Bundle Analysis**: Size monitoring
-- **Performance Metrics**: Core Web Vitals
-- **User Analytics**: [Future implementation]
+- **Development**: Hot Module Replacement, Bundle Analyzer, TypeScript checking
+- **Production**: Bundle analysis, performance metrics, error tracking (Sentry)
+- **Quality**: ESLint + Prettier + Husky pre-commit hooks
 
 ## 🤝 Contributing
 
-### Development Workflow
-
-1. **Code Quality**: 100% test coverage required
-2. **Performance**: Bundle size limits enforced
-3. **Type Safety**: Strict TypeScript configuration
-4. **Formatting**: Prettier + ESLint auto-fix
+- **Code Quality**: 100% test coverage required
+- **Performance**: Bundle size limits enforced
+- **Type Safety**: Strict TypeScript configuration
+- **Formatting**: Prettier + ESLint auto-fix
+- **Pre-commit**: All checks run automatically via Husky
 
 ## 🚀 Deployment & CI/CD
 
@@ -451,8 +408,9 @@ Before deploying to production, ensure:
 - [ ] Performance monitoring active
 - [ ] Bundle size within limits
 - [ ] All tests passing (100% coverage)
+- [ ] Pre-commit checks passing
 
-### Build Optimization
+### Build Commands
 
 ```bash
 # Production build
@@ -465,23 +423,7 @@ yarn analyze
 ls -la dist/assets/
 ```
 
-**Bundle Analysis Features:**
-
-- **Visual Report**: Opens `dist/stats.html` in browser automatically
-- **Gzip & Brotli**: Shows compressed sizes for optimization
-- **Chunk Breakdown**: Detailed view of vendor vs. app code
-- **Size Tracking**: Monitor bundle growth over time
-
-### Performance Monitoring
-
-- **Core Web Vitals**: LCP, FID, CLS monitoring
-- **Bundle Size**: Regular analysis and optimization
-- **Error Tracking**: Sentry integration for production errors
-- **User Experience**: Real User Monitoring (RUM)
-
 ### Security Audit
-
-Before deployment, complete security checks:
 
 ```bash
 # Dependency security audit
@@ -496,20 +438,6 @@ grep -r "VITE_" .env*
 # Verify no hardcoded secrets
 grep -r "password\|secret\|key" src/ --exclude="*.test.*"
 ```
-
-**Security Checklist:**
-
-- [ ] No hardcoded API keys or secrets
-- [ ] Environment variables properly configured
-- [ ] Dependencies updated and secure
-
-### Pull Request Requirements
-
-- All tests passing
-- 100% code coverage
-- No linting errors
-- Proper TypeScript types
-- Performance impact documented
 
 ## 📚 Additional Resources
 

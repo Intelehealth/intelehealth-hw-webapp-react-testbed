@@ -1,0 +1,19 @@
+echo "🔍 Running pre-commit checks..."
+
+# Run lint-staged to format and lint staged files
+echo "📝 Formatting and linting staged files..."
+npx lint-staged
+
+# Type checking
+echo "🔧 Running TypeScript type check..."
+yarn type-check
+
+# Run tests
+echo "🧪 Running tests..."
+yarn test:run
+
+# Build verification
+echo "🏗️ Verifying build..."
+yarn build
+
+echo "✅ All pre-commit checks passed!"
