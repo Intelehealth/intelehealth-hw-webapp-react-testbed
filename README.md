@@ -126,8 +126,15 @@ ih-hw-webapp/
 │   ├── config/                    # Configuration files
 │   ├── services/                  # HTTP and API services
 │   ├── hooks/                     # Custom React hooks
+│   ├── types/                     # Common TypeScript types
+│   ├── reducers/                  # Common state reducers
 │   ├── utils/                     # Utility functions (storage, etc.)
 │   ├── test/                      # Test utilities and setup
+│   ├── examples/                  # Development examples and patterns
+│   │   ├── http-examples.tsx      # HTTP service usage examples
+│   │   ├── redux-concepts.tsx     # Redux-like state management
+│   │   ├── api-examples.tsx       # API service usage examples
+│   │   └── index.ts               # Examples exports
 │   └── modules/                   # Feature-based modules
 │       ├── auth/                  # Authentication module
 │       │   ├── login.component.ts # Login component
@@ -152,6 +159,14 @@ ih-hw-webapp/
 └── README.md                     # This file
 ```
 
+### 📏 **File Structure Rules:**
+
+- **Maximum 200 lines per file** (preferably 150-180 lines)
+- **Single responsibility** - each file demonstrates one concept
+- **Clean imports** - minimal dependencies
+- **Clear naming** - descriptive file names
+- **Examples folder** - contains focused, reusable example components
+
 ### 📝 File Naming Convention
 
 The project follows a consistent naming convention for different file types:
@@ -160,6 +175,7 @@ The project follows a consistent naming convention for different file types:
 - **Services**: `.service.ts` (e.g., `auth.service.ts`, `patient.service.ts`)
 - **Hooks**: `.hook.ts` (e.g., `auth.hook.ts`, `patient.hook.ts`)
 - **Types**: `.types.ts` (e.g., `auth.types.ts`, `patient.types.ts`)
+- **Reducers**: `.reducer.ts` (e.g., `auth.reducer.ts`, `patient.reducer.ts`)
 - **Utilities**: `.util.ts` (e.g., `storage.util.ts`, `validation.util.ts`)
 - **Constants**: `.constant.ts` (e.g., `api.constant.ts`, `routes.constant.ts`)
 

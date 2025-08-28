@@ -19,11 +19,13 @@
     "test:watch": "vitest --watch"
   },
   "dependencies": {
+    "@reduxjs/toolkit": "^2.8.2",
     "@sentry/react": "^10.5.0",
     "@sentry/tracing": "^7.120.4",
     "axios": "^1.11.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-redux": "^9.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
