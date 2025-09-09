@@ -1,0 +1,26 @@
+# CODEOWNERS file for Intelehealth HW Webapp React
+
+# Global owners - these users will be requested for review on all pull requests
+* @Zeeshan-IH
+
+# Source code
+src/ @Zeeshan-IH
+
+# DevOps and Infrastructure
+*.yml @satyadeep-ih
+*.yaml @satyadeep-ih
+Dockerfile* @satyadeep-ih
+docker-compose* @satyadeep-ih
+.github/ @satyadeep-ih
+deploy/ @satyadeep-ih
+scripts/ @satyadeep-ih
+
+# Documentation
+*.md @Zeeshan-IH @satyadeep-ih
+README.md @Zeeshan-IH @satyadeep-ih
+
+# Build and deployment
+dist/ @satyadeep-ih
+coverage/ @satyadeep-ih
+
+# Note: Replace @Zeeshan-IH and @satyadeep-ih with your actual GitHub usernames if different
