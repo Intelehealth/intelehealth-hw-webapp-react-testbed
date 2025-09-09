@@ -389,6 +389,202 @@ function MyComponent() {
 - **Production**: Bundle analysis, performance metrics, error tracking (Sentry)
 - **Quality**: ESLint + Prettier + Husky pre-commit hooks
 
+## 🌿 GitHub Branch Strategy
+
+### Branch Structure
+
+Our project follows a **4-branch strategy** with clear separation of concerns:
+
+```
+main (production)
+  ↑
+staging (pre-production)
+  ↑
+qa (quality assurance)
+  ↑
+dev (development)
+```
+
+### Branch Purposes
+
+- **`main`** - Production-ready code, stable releases only
+- **`staging`** - Pre-production environment, final testing before production
+- **`qa`** - Quality assurance branch, testing and validation
+- **`dev`** - Development branch, anyone can push for testing
+
+### Branch Flow Rules
+
+1. **Development Flow**:
+   - Devs cut branches from `qa` for development
+   - Anyone can push directly to `dev` for testing
+   - `dev` is used for development server testing
+
+2. **QA Process**:
+   - Feature branches are merged to `dev` for dev server testing
+   - **Same feature branch** is then merged to `qa` for QA testing
+   - **CRITICAL**: `dev` branch NEVER merges directly into `qa`
+   - Only individual feature branches merge to `qa`
+
+3. **Deployment Flow**:
+   - `qa` → `staging` → `main` (sequential promotion)
+   - **CRITICAL**: `dev` can NEVER merge directly into `qa`
+   - All production deployments must go through the proper QA process
+
+### Branch Naming Conventions
+
+Follow these naming patterns for all feature branches:
+
+#### Feature Branches
+
+```
+feature/<PROJECT_SHORT_CODE>_<feature-name>
+feature/<feature-name>                    # For general features
+```
+
+**Examples:**
+
+- `feature/NAS_patient-registration` # for example: If it's NAS specific
+- `feature/dashboard-patient-list`
+- `feature/auth-login-flow`
+- `feature/reports-export`
+
+#### Bug Fix Branches
+
+```
+fix/<fix-details-in-short-n-specific>
+```
+
+**Examples:**
+
+- `fix/login-validation-error`
+- `fix/patient-search-performance`
+- `fix/mobile-responsive-issues`
+
+#### Hotfix Branches
+
+```
+hotfix/<fix-details-in-short-n-specific>
+```
+
+**Examples:**
+
+- `hotfix/critical-security-patch`
+- `hotfix/production-crash-fix`
+- `hotfix/urgent-data-loss-prevention`
+
+#### Patch Branches
+
+```
+patch/<patch-details>
+```
+
+**Examples:**
+
+- `patch/update-dependencies`
+- `patch/performance-optimization`
+- `patch/accessibility-improvements`
+
+#### Improvement Branches
+
+```
+improvements/<PROJECT_SHORT_CODE>_<improvement-details>
+improvements/<improvement-details>        # For general improvements
+```
+
+**Examples:**
+
+- `improvements/patient-ui-ux`
+- `improvements/dashboard-performance`
+- `improvements/mobile-navigation`
+
+### Branch Workflow Examples
+
+#### Feature Development
+
+```bash
+# 1. Devs cut branch from QA for development
+git checkout qa
+git pull origin qa
+git checkout -b feature/patient-registration
+
+# 2. Develop on the branch
+# ... make changes ...
+git add .
+git commit -m "feat: implement patient registration"
+git push origin feature/patient-registration
+
+# 3. Merge branch to dev for testing on dev server
+git checkout dev
+git merge feature/patient-registration
+git push origin dev
+# ... test on dev server ...
+
+# 4. Merge same branch to qa for QA testing (NOT dev to qa!)
+git checkout qa
+git merge feature/patient-registration
+git push origin qa
+# ... QA testing the ticket ...
+
+# 5. Once QA approved, merge qa branch to staging
+git checkout staging
+git merge qa
+git push origin staging
+# ... staging testing ...
+
+# 6. Finally, merge staging to main for production
+git checkout main
+git merge staging
+git push origin main
+```
+
+#### Hotfix Process
+
+```bash
+# 1. Start from main (production issue)
+git checkout main
+git pull origin main
+
+# 2. Create hotfix branch
+git checkout -b hotfix/critical-security-patch
+
+# 3. Fix the issue
+# ... make changes ...
+
+# 4. Test and merge to main
+git checkout main
+git merge hotfix/critical-security-patch
+git push origin main
+
+# 5. Also merge to dev, qa and staging to keep them updated
+git checkout dev
+git merge hotfix/critical-security-patch
+git push origin dev
+
+git checkout qa
+git merge hotfix/critical-security-patch
+git push origin qa
+
+git checkout staging
+git merge hotfix/critical-security-patch
+git push origin staging
+```
+
+### Branch Protection Rules
+
+- **`main`**: Requires pull request, code review, passing tests, and can only be merged by code owners or repo admins
+- **`staging`**: Requires pull request, passing tests, and can only be merged by code owners or repo admins
+- **`qa`**: Requires pull request, passing tests, and can only be merged by code owners or repo admins
+- **`dev`**: No restrictions (anyone can push)
+
+### Important Notes
+
+- ⚠️ **NEVER** merge `dev` directly into `qa`
+- ✅ Always create feature branches from `dev`
+- ✅ QA must create branches from `dev` for testing
+- ✅ Use descriptive branch names following the conventions
+- ✅ Delete feature branches after merging
+- ✅ Keep branch names short but descriptive
+
 ## 🤝 Contributing
 
 - **Code Quality**: 100% test coverage required
@@ -396,6 +592,7 @@ function MyComponent() {
 - **Type Safety**: Strict TypeScript configuration
 - **Formatting**: Prettier + ESLint auto-fix
 - **Pre-commit**: All checks run automatically via Husky
+- **Branch Strategy**: Follow the GitHub branch strategy outlined above
 
 ## 🚀 Deployment & CI/CD
 
@@ -453,3 +650,7 @@ For technical support or questions, please contact the **webapp team lead**.
 ---
 
 **Built with ❤️ and ☕ for healthcare workers**
+
+# Test commit for personal account
+
+# Another test for account verification
