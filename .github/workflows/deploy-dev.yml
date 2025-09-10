@@ -1,0 +1,58 @@
+name: 🚀 Deploy to Development
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '22.18.0'
+  DEPLOY_ENV: 'development'
+
+jobs:
+  deploy-dev:
+    name: Deploy to Development Server
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'yarn'
+
+      - name: 📦 Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: 🔍 Run quality checks
+        run: |
+          yarn lint
+          yarn format:check
+          yarn type-check
+          yarn test:run
+
+      - name: 🏗️ Build for development
+        run: yarn build
+        env:
+          VITE_APP_ENV: development
+          VITE_API_URL: ${{ secrets.DEV_API_URL }}
+
+      - name: 📊 Analyze bundle
+        run: yarn analyze
+
+      - name: 🚀 Deploy to Development Server
+        run: |
+          echo "🚀 Deploying to development server..."
+          # Add your deployment commands here
+          # Example: rsync, scp, or cloud provider CLI
+          echo "✅ Development deployment completed!"
+
+      - name: 📧 Notify deployment
+        if: always()
+        run: |
+          echo "📧 Development deployment notification sent"
+          # Add notification logic (Slack, email, etc.)

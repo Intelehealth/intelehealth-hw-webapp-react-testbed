@@ -1,0 +1,24 @@
+# ESLint report files
+eslint-report-*.json
+
+# Build outputs
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Generated files
+*.log
+*.tmp
+
+# Coverage reports
+coverage/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
