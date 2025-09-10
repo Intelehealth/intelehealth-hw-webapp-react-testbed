@@ -104,6 +104,13 @@ Set these secrets in your GitHub repository settings:
 - `PROD_API_URL`: Production API endpoint
 - `PROD_SENTRY_DSN`: Production Sentry DSN
 
+#### Code Coverage (Optional)
+
+- `CODECOV_TOKEN`: Codecov upload token for coverage reporting
+  - **Note**: Required for protected branches or if you want detailed coverage reports
+  - **Get token**: Visit [Codecov](https://codecov.io) and generate a token for your repository
+  - **Fallback**: If not provided, coverage upload will be skipped but won't fail the workflow
+
 ## 🏗️ Deployment Environments
 
 ### Development (`dev` branch)
