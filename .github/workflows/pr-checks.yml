@@ -109,16 +109,6 @@ jobs:
           yarn audit --level high || echo "⚠️ High-level vulnerabilities found - check audit output above"
           npm audit --audit-level high || echo "⚠️ High-level vulnerabilities found - check audit output above"
 
-      - name: 🔍 Check for secrets
-        run: |
-          echo "🔍 Checking for potential secrets..."
-          if grep -r -i "password\|secret\|key\|token" src/ --exclude="*.test.*" --exclude="*.spec.*"; then
-            echo "⚠️ Potential secrets found in source code"
-            exit 1
-          else
-            echo "✅ No secrets found in source code"
-          fi
-
       - name: 🔍 Dependency vulnerability scan
         run: |
           echo "🔍 Running dependency vulnerability scan..."

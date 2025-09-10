@@ -21,8 +21,7 @@ This directory contains GitHub Actions workflows for automated testing, quality 
   - Unit tests with coverage (Node 22.18.0)
   - Build verification
   - Bundle analysis and performance budget checks
-  - Security audit (moderate level)
-  - Secrets scanning
+  - Security audit (high level)
   - Dependency vulnerability scan
   - Coverage reporting to Codecov
   - PR comments with detailed results
@@ -34,8 +33,6 @@ This directory contains GitHub Actions workflows for automated testing, quality 
 - **Purpose**: Continuous code quality monitoring and security scanning
 - **Features**:
   - All PR check features plus:
-  - Higher security audit level (high)
-  - Environment variable usage checks
   - Weekly scheduled security scans
   - Failure notifications for security issues
   - Comprehensive quality reporting
@@ -165,8 +162,6 @@ Set these secrets in your GitHub repository settings:
 - **PR Checks**: High-level security audits on every PR (low/moderate ignored)
 - **Code Quality**: High-level security audits on pushes + weekly schedule (low/moderate ignored)
 - **Dependency Audit**: Comprehensive vulnerability scanning
-- **Secret Scanning**: Prevents secret commits in source code
-- **Environment Checks**: Validates environment variable usage
 
 ### Security Audit Strategy
 
@@ -258,14 +253,14 @@ graph TD
 - **Node.js version conflicts**: Check matrix strategy
 - **Cache issues**: Clear GitHub Actions cache
 - **Secret not found**: Verify secret names and permissions
-- **Build failures**: Check environment variables
+- **Build failures**: Check build configuration and dependencies
 
 ### Debug Steps
 
 1. Check workflow logs
-2. Verify environment variables
-3. Test locally with same Node.js version
-4. Check dependency versions
+2. Test locally with same Node.js version
+3. Check dependency versions
+4. Verify build configuration
 
 ## 📚 Resources
 
