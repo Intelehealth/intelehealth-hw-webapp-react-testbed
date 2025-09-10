@@ -2,7 +2,7 @@ name: 📏 Code Quality & Security
 
 on:
   push:
-    branches: [main, dev, qa, staging, feature/gh-actions]
+    branches: [main, dev, qa, staging]
   schedule:
     - cron: '0 2 * * 1' # Weekly on Monday at 2 AM
 
