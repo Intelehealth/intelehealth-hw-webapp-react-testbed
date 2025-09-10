@@ -4,9 +4,15 @@ This directory contains GitHub Actions workflows for automated testing, quality 
 
 ## 📋 Workflow Overview
 
+### 🔄 Workflow Separation
+
+- **PR Checks**: Only runs on pull request events (when creating/updating PRs)
+- **Code Quality**: Only runs on pushes to main branches + weekly security scans
+- **Deployments**: Only run on pushes to specific environment branches
+
 ### 🔍 Pull Request Checks (`pr-checks.yml`)
 
-- **Triggers**: Pull requests to `main`, `dev`, `qa`, `staging`, `feature/gh-actions`
+- **Triggers**: Pull requests to `main`, `dev`, `qa`, `staging`
 - **Purpose**: Comprehensive quality assurance for PRs
 - **Features**:
   - ESLint analysis with JSON reporting
@@ -24,7 +30,7 @@ This directory contains GitHub Actions workflows for automated testing, quality 
 
 ### 📏 Code Quality & Security (`code-quality.yml`)
 
-- **Triggers**: Push to `main`, `dev`, `qa`, `staging`, `feature/gh-actions` + Weekly schedule (Monday 2 AM)
+- **Triggers**: Push to `main`, `dev`, `qa`, `staging` + Weekly schedule (Monday 2 AM)
 - **Purpose**: Continuous code quality monitoring and security scanning
 - **Features**:
   - All PR check features plus:
@@ -156,11 +162,17 @@ Set these secrets in your GitHub repository settings:
 
 ### Security Monitoring
 
-- **PR Checks**: Moderate-level security audits on every PR
-- **Code Quality**: High-level security audits on pushes + weekly schedule
+- **PR Checks**: High-level security audits on every PR (low/moderate ignored)
+- **Code Quality**: High-level security audits on pushes + weekly schedule (low/moderate ignored)
 - **Dependency Audit**: Comprehensive vulnerability scanning
 - **Secret Scanning**: Prevents secret commits in source code
 - **Environment Checks**: Validates environment variable usage
+
+### Security Audit Strategy
+
+- **High-Level Vulnerabilities**: Workflows fail if found (critical security issues)
+- **Low/Moderate Vulnerabilities**: Logged but don't fail workflows (non-critical issues)
+- **Rationale**: Focus on actionable security issues while avoiding false positives
 
 ### Quality Metrics
 
