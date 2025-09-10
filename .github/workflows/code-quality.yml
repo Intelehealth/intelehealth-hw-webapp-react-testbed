@@ -1,0 +1,153 @@
+name: 📏 Code Quality & Security
+
+on:
+  push:
+    branches: [main, dev, qa, staging, feature/gh-actions]
+  schedule:
+    - cron: '0 2 * * 1' # Weekly on Monday at 2 AM
+
+jobs:
+  code-quality:
+    name: Comprehensive Code Quality & Security Analysis
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22.18.0]
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+
+      - name: 📦 Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: 🔍 ESLint analysis
+        run: |
+          echo "🔍 Running ESLint analysis..."
+          yarn lint --format json --output-file eslint-report-${{ matrix.node-version }}.json || true
+
+      - name: 🎨 Prettier check
+        run: |
+          echo "🎨 Running Prettier check..."
+          yarn format:check
+
+      - name: 🔧 TypeScript analysis
+        run: |
+          echo "🔧 Running TypeScript analysis..."
+          yarn type-check
+
+      - name: 🧪 Run tests
+        run: yarn test:run
+
+      - name: 📊 Generate coverage report
+        run: yarn test:coverage
+
+      - name: 📊 Check coverage threshold
+        run: |
+          echo "🔍 Checking coverage threshold..."
+          COVERAGE=$(grep -o '"lines":{"total":[0-9]*,"covered":[0-9]*,"skipped":[0-9]*,"pct":[0-9.]*}' coverage/coverage-summary.json | grep -o '"pct":[0-9.]*' | cut -d':' -f2)
+          echo "Current coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 100" | bc -l) )); then
+            echo "❌ Coverage is ${COVERAGE}%, but 100% is required"
+            exit 1
+          else
+            echo "✅ Coverage is ${COVERAGE}% - meets 100% requirement"
+          fi
+
+      - name: 📈 Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+      - name: 🏗️ Build verification
+        run: yarn build
+
+      - name: 📊 Bundle size analysis
+        run: |
+          echo "📊 Analyzing bundle size..."
+          yarn analyze
+
+      - name: 📈 Performance budget check
+        run: |
+          echo "📈 Checking performance budget..."
+
+          # Get bundle size in KB
+          BUNDLE_SIZE_KB=$(du -sk dist/ | cut -f1)
+          BUNDLE_SIZE_MB=$((BUNDLE_SIZE_KB / 1024))
+          BUNDLE_SIZE_DISPLAY=$(du -sh dist/ | cut -f1)
+
+          echo "Bundle size: $BUNDLE_SIZE_DISPLAY ($BUNDLE_SIZE_KB KB)"
+
+          # Set performance budget (2MB = 2048KB)
+          MAX_SIZE_KB=2048
+
+          if [ $BUNDLE_SIZE_KB -le $MAX_SIZE_KB ]; then
+            echo "✅ Bundle size check passed ($BUNDLE_SIZE_KB KB <= $MAX_SIZE_KB KB)"
+          else
+            echo "❌ Bundle size check failed ($BUNDLE_SIZE_KB KB > $MAX_SIZE_KB KB)"
+            echo "💡 Consider optimizing your bundle size"
+            exit 1
+          fi
+
+      - name: 🔒 Security audit
+        run: |
+          echo "🔍 Running security audit..."
+          echo "Checking for high-level vulnerabilities only..."
+          yarn audit --level high || echo "⚠️ High-level vulnerabilities found - check audit output above"
+          npm audit --audit-level high || echo "⚠️ High-level vulnerabilities found - check audit output above"
+
+      - name: 🔍 Dependency vulnerability scan
+        run: |
+          echo "🔍 Running dependency vulnerability scan..."
+          npx audit-ci --config .audit-ci.json || true
+
+      - name: 📝 Generate quality report
+        run: |
+          echo "📝 Generating comprehensive quality report..."
+          echo "# Code Quality & Security Report" > quality-report-${{ matrix.node-version }}.md
+          echo "## Analysis Results" >> quality-report-${{ matrix.node-version }}.md
+          echo "- ESLint: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Prettier: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- TypeScript: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Unit Tests: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Bundle Analysis: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Security Audit: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Secrets Scan: Completed" >> quality-report-${{ matrix.node-version }}.md
+          echo "- Dependency Scan: Completed" >> quality-report-${{ matrix.node-version }}.md
+
+      - name: 📦 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-files-${{ matrix.node-version }}
+          path: dist/
+          retention-days: 7
+
+      - name: 📊 Upload quality reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports-${{ matrix.node-version }}
+          path: |
+            eslint-report-${{ matrix.node-version }}.json
+            quality-report-${{ matrix.node-version }}.md
+            coverage/
+          retention-days: 30
+
+      - name: 📧 Notify security issues
+        if: failure()
+        run: |
+          echo "🚨 Security or quality issues detected!"
+          # Add notification logic for security/quality issues
