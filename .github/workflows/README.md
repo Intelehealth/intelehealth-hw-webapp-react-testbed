@@ -1,6 +1,6 @@
 # 🚀 GitHub Actions CI/CD Pipeline
 
-This directory contains GitHub Actions workflows for automated testing, quality checks, and deployment across different environments.
+This directory contains GitHub Actions workflows for automated testing, quality checks, and deployment across different environments
 
 ## 📋 Workflow Overview
 
