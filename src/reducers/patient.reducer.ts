@@ -1,4 +1,8 @@
-import type { PatientState, Patient, UpdatePatientData } from '../types/patient.types';
+import type {
+  PatientState,
+  Patient,
+  UpdatePatientData,
+} from '../types/patient.types';
 
 // Patient action types
 export type PatientAction =
@@ -12,11 +16,14 @@ export type PatientAction =
   | { type: 'CLEAR_ERROR' };
 
 // Patient reducer
-export const patientReducer = (state: PatientState, action: PatientAction): PatientState => {
+export const patientReducer = (
+  state: PatientState,
+  action: PatientAction
+): PatientState => {
   switch (action.type) {
     case 'FETCH_START':
       return { ...state, loading: true, error: null };
-    
+
     case 'FETCH_SUCCESS':
       return {
         ...state,
@@ -25,17 +32,17 @@ export const patientReducer = (state: PatientState, action: PatientAction): Pati
         error: null,
         totalCount: action.payload.length,
       };
-    
+
     case 'FETCH_FAILURE':
       return { ...state, loading: false, error: action.payload };
-    
+
     case 'ADD_PATIENT':
       return {
         ...state,
         patients: [...state.patients, action.payload],
         totalCount: state.totalCount + 1,
       };
-    
+
     case 'UPDATE_PATIENT':
       return {
         ...state,
@@ -45,20 +52,22 @@ export const patientReducer = (state: PatientState, action: PatientAction): Pati
             : patient
         ),
       };
-    
+
     case 'DELETE_PATIENT':
       return {
         ...state,
-        patients: state.patients.filter((patient: Patient) => patient.id !== action.payload),
+        patients: state.patients.filter(
+          (patient: Patient) => patient.id !== action.payload
+        ),
         totalCount: state.totalCount - 1,
       };
-    
+
     case 'SET_CURRENT_PATIENT':
       return { ...state, currentPatient: action.payload };
-    
+
     case 'CLEAR_ERROR':
       return { ...state, error: null };
-    
+
     default:
       return state;
   }
