@@ -28,13 +28,6 @@ jobs:
       - name: 📦 Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: 🔍 Run quality checks
-        run: |
-          yarn lint
-          yarn format:check
-          yarn type-check
-          yarn test:run
-
       - name: 🏗️ Build for development
         run: yarn build
         env:

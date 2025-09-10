@@ -275,4 +275,4 @@ graph TD
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [Node.js Setup Action](https://github.com/actions/setup-node)
 - [Codecov Action](https://github.com/codecov/codecov-action)
-- [Security Best Practices](https://docs.github.com/en/actions/security-guides)
+- [Security Best Practices](https://docs.github.com/en/actions/security-guides);
