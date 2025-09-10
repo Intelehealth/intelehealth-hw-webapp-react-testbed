@@ -12,7 +12,7 @@ This directory contains GitHub Actions workflows for automated testing, quality 
   - ESLint analysis with JSON reporting
   - Prettier formatting checks
   - TypeScript type checking
-  - Unit tests with coverage (Node 20)
+  - Unit tests with coverage (Node 22.18.0)
   - Build verification
   - Bundle analysis and performance budget checks
   - Security audit (moderate level)
@@ -135,7 +135,7 @@ Set these secrets in your GitHub repository settings:
 ### Coverage Reporting
 
 - **Codecov**: Automatic coverage reporting for all workflows
-- **Node.js 20 Testing**: Coverage tracked for Node 20
+- **Node.js 22.18.0 Testing**: Coverage tracked for Node 22.18.0
 - **Reports**: Available in PR comments and artifacts
 - **Upload**: Automatic upload on every test run
 
@@ -152,7 +152,7 @@ Set these secrets in your GitHub repository settings:
 - **Bundle Size**: Monitored and reported with performance budget checks
 - **Performance**: Bundle analysis and size tracking
 - **Code Quality**: ESLint analysis with JSON reporting, Prettier formatting, TypeScript analysis
-- **Test Coverage**: Node.js 20 testing with detailed coverage reports
+- **Test Coverage**: Node.js 22.18.0 testing with detailed coverage reports
 - **Artifacts**: Build files and quality reports stored for 7-30 days
 
 ## 🚨 Failure Handling
