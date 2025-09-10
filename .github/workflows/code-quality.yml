@@ -51,6 +51,18 @@ jobs:
       - name: 📊 Generate coverage report
         run: yarn test:coverage
 
+      - name: 📊 Check coverage threshold
+        run: |
+          echo "🔍 Checking coverage threshold..."
+          COVERAGE=$(grep -o '"lines":{"total":[0-9]*,"covered":[0-9]*,"skipped":[0-9]*,"pct":[0-9.]*}' coverage/coverage-summary.json | grep -o '"pct":[0-9.]*' | cut -d':' -f2)
+          echo "Current coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 100" | bc -l) )); then
+            echo "❌ Coverage is ${COVERAGE}%, but 100% is required"
+            exit 1
+          else
+            echo "✅ Coverage is ${COVERAGE}% - meets 100% requirement"
+          fi
+
       - name: 📈 Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

@@ -145,6 +145,7 @@ Set these secrets in your GitHub repository settings:
 - **Node.js 22.18.0 Testing**: Coverage tracked for Node 22.18.0
 - **Reports**: Available in PR comments and artifacts
 - **Upload**: Automatic upload on every test run
+- **Threshold**: **100% coverage required** - workflows will fail if coverage is below 100%
 
 ### Security Monitoring
 
@@ -160,6 +161,7 @@ Set these secrets in your GitHub repository settings:
 - **Performance**: Bundle analysis and size tracking
 - **Code Quality**: ESLint analysis with JSON reporting, Prettier formatting, TypeScript analysis
 - **Test Coverage**: Node.js 22.18.0 testing with detailed coverage reports
+- **Coverage Threshold**: 100% coverage required - builds fail if not met
 - **Artifacts**: Build files and quality reports stored for 7-30 days
 
 ## 🚨 Failure Handling
