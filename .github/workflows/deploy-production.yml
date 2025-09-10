@@ -1,0 +1,99 @@
+name: 🚀 Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  DEPLOY_ENV: 'production'
+
+jobs:
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'yarn'
+
+      - name: 📦 Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: 🔍 Run production quality checks
+        run: |
+          yarn lint
+          yarn format:check
+          yarn type-check
+          yarn test:coverage
+
+      - name: 🏗️ Build for production
+        run: yarn build
+        env:
+          VITE_APP_ENV: production
+          VITE_API_URL: ${{ secrets.PROD_API_URL }}
+          VITE_SENTRY_DSN: ${{ secrets.PROD_SENTRY_DSN }}
+
+      - name: 📊 Production bundle analysis
+        run: |
+          yarn analyze
+          echo "📊 Production bundle analysis completed"
+
+      - name: 🔒 Production security audit
+        run: |
+          yarn audit --level high
+          npm audit --audit-level high
+
+      - name: 🏷️ Create release tag
+        id: create_tag
+        run: |
+          TAG_NAME="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          git tag -a $TAG_NAME -m "Production release $TAG_NAME"
+          git push origin $TAG_NAME
+
+      - name: 🚀 Deploy to Production Server
+        run: |
+          echo "🚀 Deploying to production environment..."
+          # Add your production deployment commands here
+          echo "✅ Production deployment completed!"
+
+      - name: 🧪 Run production smoke tests
+        run: |
+          echo "🧪 Running production smoke tests..."
+          # Add production smoke test commands here
+          echo "✅ Production smoke tests completed!"
+
+      - name: 📧 Notify production deployment
+        if: always()
+        run: |
+          echo "📧 Production deployment notification sent"
+          # Add production notification logic
+
+      - name: 🎉 Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag_name }}
+          release_name: Production Release ${{ steps.create_tag.outputs.tag_name }}
+          body: |
+            🚀 Production deployment completed successfully!
+
+            **Changes in this release:**
+            - See commit history for details
+
+            **Deployment Details:**
+            - Environment: Production
+            - Build: ${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false

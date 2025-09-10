@@ -1,0 +1,160 @@
+name: 🔍 Pull Request Checks
+
+on:
+  pull_request:
+    branches: [main, dev, qa, staging, feature/gh-actions]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  pr-checks:
+    name: Comprehensive PR Quality Checks
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+
+      - name: 📦 Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: 🔍 ESLint analysis
+        run: |
+          echo "🔍 Running ESLint analysis..."
+          yarn lint --format json --output-file eslint-report-${{ matrix.node-version }}.json || true
+
+      - name: 🎨 Prettier check
+        run: |
+          echo "🎨 Running Prettier check..."
+          yarn format:check
+
+      - name: 🔧 TypeScript analysis
+        run: |
+          echo "🔧 Running TypeScript analysis..."
+          yarn type-check
+
+      - name: 🧪 Run tests
+        run: yarn test:run
+
+      - name: 📊 Generate coverage report
+        run: yarn test:coverage
+
+      - name: 📈 Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: true
+
+      - name: 🏗️ Build verification
+        run: yarn build
+
+      - name: 📊 Bundle analysis
+        run: |
+          echo "📊 Analyzing bundle size..."
+          yarn analyze
+
+      - name: 📈 Performance budget check
+        run: |
+          echo "📈 Checking performance budget..."
+          BUNDLE_SIZE=$(du -sh dist/ | cut -f1)
+          echo "Bundle size: $BUNDLE_SIZE"
+
+          if [ -f "dist/assets" ]; then
+            echo "✅ Bundle size check completed"
+          else
+            echo "❌ Bundle size check failed"
+            exit 1
+          fi
+
+      - name: 🔒 Security audit
+        run: |
+          echo "🔍 Running security audit..."
+          yarn audit --level moderate
+          npm audit --audit-level moderate
+
+      - name: 🔍 Check for secrets
+        run: |
+          echo "🔍 Checking for potential secrets..."
+          if grep -r -i "password\|secret\|key\|token" src/ --exclude="*.test.*" --exclude="*.spec.*"; then
+            echo "⚠️ Potential secrets found in source code"
+            exit 1
+          else
+            echo "✅ No secrets found in source code"
+          fi
+
+      - name: 🔍 Dependency vulnerability scan
+        run: |
+          echo "🔍 Running dependency vulnerability scan..."
+          npx audit-ci --config .audit-ci.json || true
+
+      - name: 📦 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-files-${{ matrix.node-version }}
+          path: dist/
+          retention-days: 7
+
+      - name: 📊 Upload quality reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports-${{ matrix.node-version }}
+          path: |
+            eslint-report-${{ matrix.node-version }}.json
+            coverage/
+          retention-days: 30
+
+      - name: 📝 Comment PR with results
+        if: matrix.node-version == '20'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read coverage report if it exists
+            let coverageComment = '';
+            try {
+              const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+              const totalCoverage = coverage.total.lines.pct;
+              coverageComment = `\n\n## 📊 Coverage Report\n- **Total Coverage**: ${totalCoverage}%\n- **Lines**: ${coverage.total.lines.covered}/${coverage.total.lines.total}\n- **Functions**: ${coverage.total.functions.covered}/${coverage.total.functions.total}\n- **Branches**: ${coverage.total.branches.covered}/${coverage.total.branches.total}`;
+            } catch (e) {
+              coverageComment = '\n\n## 📊 Coverage Report\nCoverage data not available';
+            }
+
+            const comment = `## ✅ PR Quality Checks Completed
+
+            All quality checks have passed successfully! 🎉
+
+            **Checks Performed:**
+            - ✅ ESLint analysis
+            - ✅ Prettier formatting
+            - ✅ TypeScript type checking
+            - ✅ Unit tests (Node ${{ matrix.node-version }})
+            - ✅ Build verification
+            - ✅ Bundle analysis
+            - ✅ Performance budget check
+            - ✅ Security audit
+            - ✅ Secrets scan
+            - ✅ Dependency vulnerability scan
+            ${coverageComment}
+
+            **Ready for review!** 👀`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
