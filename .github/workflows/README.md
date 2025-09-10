@@ -6,13 +6,21 @@ This directory contains GitHub Actions workflows for automated testing, quality 
 
 ### 🔄 Workflow Separation
 
-- **PR Checks**: Only runs on pull request events (when creating/updating PRs)
+- **PR Checks**: Runs on pull requests from any branch to `main`, `dev`, `qa`, `staging`
 - **Code Quality**: Only runs on pushes to main branches + weekly security scans
 - **Deployments**: Only run on pushes to specific environment branches
 
+### 📋 PR Trigger Examples
+
+- `feature/new-feature` → `main` ✅ PR checks run
+- `bugfix/fix-issue` → `dev` ✅ PR checks run
+- `hotfix/critical-fix` → `qa` ✅ PR checks run
+- `release/v1.0` → `staging` ✅ PR checks run
+- `feature/test` → `feature/other` ❌ PR checks don't run (not targeting protected branches)
+
 ### 🔍 Pull Request Checks (`pr-checks.yml`)
 
-- **Triggers**: Pull requests to `main`, `dev`, `qa`, `staging`
+- **Triggers**: Pull requests from any branch to `main`, `dev`, `qa`, `staging`
 - **Purpose**: Comprehensive quality assurance for PRs
 - **Features**:
   - ESLint analysis with JSON reporting

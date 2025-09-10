@@ -2,7 +2,7 @@ name: 🔍 Pull Request Checks
 
 on:
   pull_request:
-    branches: [main, dev, qa, staging, feature/gh-actions]
+    branches: [main, dev, qa, staging]
     types: [opened, synchronize, reopened]
 
 jobs:
