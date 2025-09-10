@@ -1,0 +1,20 @@
+name: 🧪 Test Workflow
+
+on:
+  pull_request:
+    branches: [main, dev, qa, staging]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    name: Simple Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🧪 Test Step
+        run: |
+          echo "✅ Test workflow is working!"
+          echo "Branch: ${{ github.head_ref }}"
+          echo "Target: ${{ github.base_ref }}"
