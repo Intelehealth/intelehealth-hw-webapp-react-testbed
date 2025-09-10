@@ -83,13 +83,22 @@ jobs:
       - name: 📈 Performance budget check
         run: |
           echo "📈 Checking performance budget..."
-          BUNDLE_SIZE=$(du -sh dist/ | cut -f1)
-          echo "Bundle size: $BUNDLE_SIZE"
 
-          if [ -f "dist/assets" ]; then
-            echo "✅ Bundle size check completed"
+          # Get bundle size in KB
+          BUNDLE_SIZE_KB=$(du -sk dist/ | cut -f1)
+          BUNDLE_SIZE_MB=$((BUNDLE_SIZE_KB / 1024))
+          BUNDLE_SIZE_DISPLAY=$(du -sh dist/ | cut -f1)
+
+          echo "Bundle size: $BUNDLE_SIZE_DISPLAY ($BUNDLE_SIZE_KB KB)"
+
+          # Set performance budget (2MB = 2048KB)
+          MAX_SIZE_KB=2048
+
+          if [ $BUNDLE_SIZE_KB -le $MAX_SIZE_KB ]; then
+            echo "✅ Bundle size check passed ($BUNDLE_SIZE_KB KB <= $MAX_SIZE_KB KB)"
           else
-            echo "❌ Bundle size check failed"
+            echo "❌ Bundle size check failed ($BUNDLE_SIZE_KB KB > $MAX_SIZE_KB KB)"
+            echo "💡 Consider optimizing your bundle size"
             exit 1
           fi
 

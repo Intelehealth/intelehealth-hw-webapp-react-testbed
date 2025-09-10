@@ -147,6 +147,13 @@ Set these secrets in your GitHub repository settings:
 - **Upload**: Automatic upload on every test run
 - **Threshold**: **100% coverage required** - workflows will fail if coverage is below 100%
 
+### Performance Budget
+
+- **Bundle Size Limit**: 2MB (2048KB) maximum
+- **Monitoring**: Automatic bundle size analysis on every build
+- **Failure**: Workflows fail if bundle exceeds size limit
+- **Optimization**: Suggestions provided when budget is exceeded
+
 ### Security Monitoring
 
 - **PR Checks**: Moderate-level security audits on every PR
@@ -157,7 +164,7 @@ Set these secrets in your GitHub repository settings:
 
 ### Quality Metrics
 
-- **Bundle Size**: Monitored and reported with performance budget checks
+- **Bundle Size**: Monitored and reported with performance budget checks (2MB limit)
 - **Performance**: Bundle analysis and size tracking
 - **Code Quality**: ESLint analysis with JSON reporting, Prettier formatting, TypeScript analysis
 - **Test Coverage**: Node.js 22.18.0 testing with detailed coverage reports
