@@ -4,6 +4,10 @@ on:
   push:
     branches: [dev]
   workflow_dispatch:
+  workflow_run:
+    workflows: ['🔍 Pull Request Checks']
+    types: [completed]
+    branches: [dev]
 
 env:
   NODE_VERSION: '22.18.0'
@@ -14,6 +18,8 @@ jobs:
     name: Deploy to Development Server
     runs-on: ubuntu-latest
     environment: development
+    # Only run if PR checks passed or if triggered manually
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 
     steps:
       - name: 📥 Checkout code
@@ -37,12 +43,115 @@ jobs:
       - name: 📊 Analyze bundle
         run: yarn analyze
 
+      - name: 🔐 Setup SSH Key
+        run: |
+          echo "🔐 Setting up SSH key for server access..."
+          # Create .ssh directory
+          mkdir -p ~/.ssh
+          # Set proper permissions
+          chmod 700 ~/.ssh
+          # Write the private key to file
+          echo "${{ secrets.DEV_SERVER_PEM_KEY }}" > ~/.ssh/dev_server.pem
+          # Set proper permissions for the key file
+          chmod 600 ~/.ssh/dev_server.pem
+          # Add server to known hosts to avoid host key verification prompt
+          ssh-keyscan -H ${{ secrets.DEV_SERVER_HOST }} >> ~/.ssh/known_hosts
+          echo "✅ SSH key setup completed!"
+
+      - name: 🧪 Test Server Connection
+        run: |
+          echo "🧪 Testing connection to development server..."
+          ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "echo 'Connection successful!'"
+          echo "✅ Server connection test passed!"
+
       - name: 🚀 Deploy to Development Server
         run: |
           echo "🚀 Deploying to development server..."
-          # Add your deployment commands here
-          # Example: rsync, scp, or cloud provider CLI
-          echo "✅ Development deployment completed!"
+
+          # Create deployment directory on server
+          ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+            mkdir -p ${{ secrets.DEV_DEPLOY_PATH }}/backup
+            mkdir -p ${{ secrets.DEV_DEPLOY_PATH }}/current
+          "
+
+          # Backup current deployment (if exists)
+          ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+            if [ -d '${{ secrets.DEV_DEPLOY_PATH }}/current' ] && [ \"\$(ls -A ${{ secrets.DEV_DEPLOY_PATH }}/current)\" ]; then
+              echo '📦 Creating backup of current deployment...'
+              cp -r ${{ secrets.DEV_DEPLOY_PATH }}/current/* ${{ secrets.DEV_DEPLOY_PATH }}/backup/ 2>/dev/null || true
+              echo '✅ Backup created successfully!'
+            else
+              echo 'ℹ️ No existing deployment to backup'
+            fi
+          "
+
+          # Upload build files to server
+          echo "📤 Uploading build files to server..."
+          rsync -avz --delete -e "ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no" \
+            dist/ \
+            ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }}:${{ secrets.DEV_DEPLOY_PATH }}/current/
+
+          # Set proper permissions on server
+          ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+            echo '🔧 Setting proper permissions...'
+            chmod -R 755 ${{ secrets.DEV_DEPLOY_PATH }}/current/
+            chown -R ${{ secrets.DEV_SERVER_USER }}:${{ secrets.DEV_SERVER_USER }} ${{ secrets.DEV_DEPLOY_PATH }}/current/
+            echo '✅ Permissions set successfully!'
+          "
+
+          # Update web server configuration (if needed)
+          ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+            echo '🌐 Updating web server configuration...'
+            # Add your web server restart commands here
+            # Example for Nginx:
+            # sudo systemctl reload nginx
+            # Example for Apache:
+            # sudo systemctl reload apache2
+            echo '✅ Web server configuration updated!'
+          "
+
+          echo "✅ Development deployment completed successfully!"
+
+      # - name: 🧪 Post-Deployment Health Check
+      #   run: |
+      #     echo "🧪 Running post-deployment health checks..."
+      #
+      #     # Wait a moment for deployment to settle
+      #     sleep 10
+      #
+      #     # Check if the application is responding
+      #     HEALTH_CHECK_URL="${{ secrets.DEV_HEALTH_CHECK_URL }}"
+      #     if [ -n "$HEALTH_CHECK_URL" ]; then
+      #       echo "🔍 Checking application health at: $HEALTH_CHECK_URL"
+      #       HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
+      #
+      #       if [ "$HTTP_STATUS" = "200" ]; then
+      #         echo "✅ Health check passed! Application is responding correctly."
+      #       else
+      #         echo "⚠️ Health check failed with status: $HTTP_STATUS"
+      #         echo "🔍 Checking server status..."
+      #         ssh -i ~/.ssh/dev_server.pem -o StrictHostKeyChecking=no ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+      #           echo 'Server status:'
+      #           ps aux | grep -E '(nginx|apache|node)' | grep -v grep || echo 'No web server processes found'
+      #           echo 'Disk space:'
+      #           df -h
+      #           echo 'Recent logs:'
+      #           tail -n 20 /var/log/nginx/error.log 2>/dev/null || echo 'No nginx error logs found'
+      #         "
+      #       fi
+      #     else
+      #       echo "ℹ️ No health check URL configured, skipping health check"
+      #     fi
+      #
+      #     echo "✅ Post-deployment health check completed!"
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          # Remove the private key file for security
+          rm -f ~/.ssh/dev_server.pem
+          echo "✅ Cleanup completed!"
 
       - name: 📧 Notify deployment
         if: always()

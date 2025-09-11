@@ -7,20 +7,18 @@
 src/ @Zeeshan-IH
 
 # DevOps and Infrastructure
-*.yml @satyadeep-ih
-*.yaml @satyadeep-ih
-Dockerfile* @satyadeep-ih
-docker-compose* @satyadeep-ih
-.github/ @satyadeep-ih
-deploy/ @satyadeep-ih
-scripts/ @satyadeep-ih
+*.yml @Zeeshan-IH
+*.yaml @Zeeshan-IH
+Dockerfile* @Zeeshan-IH
+docker-compose* @Zeeshan-IH
+.github/ @Zeeshan-IH
+deploy/ @Zeeshan-IH
+scripts/ @Zeeshan-IH
 
 # Documentation
-*.md @Zeeshan-IH @satyadeep-ih
-README.md @Zeeshan-IH @satyadeep-ih
+*.md @Zeeshan-IH
+README.md @Zeeshan-IH
 
 # Build and deployment
-dist/ @satyadeep-ih
-coverage/ @satyadeep-ih
-
-# Note: Replace @Zeeshan-IH and @satyadeep-ih with your actual GitHub usernames if different
+dist/ @Zeeshan-IH
+coverage/ @Zeeshan-IH
