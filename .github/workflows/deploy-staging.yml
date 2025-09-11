@@ -4,6 +4,10 @@ on:
   push:
     branches: [staging]
   workflow_dispatch:
+  workflow_run:
+    workflows: ['🔍 Pull Request Checks']
+    types: [completed]
+    branches: [staging]
 
 env:
   NODE_VERSION: '22.18.0'
@@ -14,6 +18,8 @@ jobs:
     name: Deploy to Staging Environment
     runs-on: ubuntu-latest
     environment: staging
+    # Only run if PR checks passed or if triggered manually
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 
     steps:
       - name: 📥 Checkout code
