@@ -124,7 +124,7 @@ test('posts one review with an inline comment on a line inside the diff', async 
       review.body.comments[0].body,
       /<!-- claude-review rule=SEC-001 fid=\w+/
     );
-    assert.match(review.body.body, /## Claude review/);
+    assert.match(review.body.body, /## Automated PR review/);
   } finally {
     stub.server.close();
   }

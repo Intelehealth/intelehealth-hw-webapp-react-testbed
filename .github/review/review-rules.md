@@ -296,6 +296,14 @@ failure points.
 note.** A change that requires the migration, the API, and the client to ship in
 a particular order, with nothing in the PR description saying so.
 
+**OPS-005 · major · Automated safety net removed or weakened.** A CI workflow,
+test, coverage threshold, lint rule, or type check deleted, disabled, or
+loosened, without the PR saying what replaces it. Includes skipping tests
+(`.skip`, `xit`), lowering a coverage floor, adding a broad `eslint-disable` at
+file scope, and removing a required status check. Say which protection is being
+given up and what now catches that class of problem instead. A deliberate
+removal is fine; an unexplained one is how a repo quietly loses its guardrails.
+
 ---
 
 ## GEN — Uncategorised

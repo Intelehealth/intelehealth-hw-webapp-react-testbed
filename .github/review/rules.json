@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-08-07T00:00:00Z",
   "defaults": {
     "maxCommentsPerPR": 12,
@@ -657,6 +657,18 @@
     "OPS-004": {
       "title": "Backwards-incompatible change with no deploy ordering\nnote",
       "severity": "minor",
+      "weight": 0.7,
+      "state": "active",
+      "stats": {
+        "accepted": 0,
+        "rejected": 0,
+        "ignored": 0
+      },
+      "history": []
+    },
+    "OPS-005": {
+      "title": "Automated safety net removed or weakened",
+      "severity": "major",
       "weight": 0.7,
       "state": "active",
       "stats": {

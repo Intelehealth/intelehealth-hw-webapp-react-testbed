@@ -109,7 +109,7 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
   const counts = { blocker: 0, major: 0, minor: 0, nit: 0 };
   for (const f of kept) counts[f.severity]++;
 
-  const lines = ['## Claude review', ''];
+  const lines = ['## Automated PR review', ''];
   lines.push(summary || '_No summary was produced._', '');
 
   if (kept.length === 0) {
