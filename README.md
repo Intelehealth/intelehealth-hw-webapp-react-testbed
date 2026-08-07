@@ -99,7 +99,11 @@ It does **not** re-review on every push. That keeps the free-tier budget for cha
 
 **Required setup:** an `OPENROUTER_API_KEY` repository secret. Turn training **off** for free models in OpenRouter's privacy settings before enabling — diffs of clinical code can carry table names, field names, and fixture data.
 
-**Opting out:** add the `skip-review` label to a PR. The review never blocks a merge; it posts as a comment.
+**It blocks the merge.** While the reviewer has an unresolved finding against a PR, its check is red and branch protection will not let the PR merge. Push the fix and the check re-runs, or re-request with the `review-again` label.
+
+Only _findings_ block. Every reviewer failure — no API key, provider outage, exhausted budget — passes the check, so a bad day at OpenRouter never stops the team merging.
+
+**Opting out:** add the `skip-review` label. That bypasses the gate entirely and is the deliberate escape hatch when a finding is wrong or not worth fixing now.
 
 **Note:** `/review` only works once this is merged to `main` — GitHub runs comment-triggered workflows from the default branch. The label and the open/reopen triggers work from a PR branch immediately.
 

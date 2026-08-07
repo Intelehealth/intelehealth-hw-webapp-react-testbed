@@ -1,28 +1,36 @@
-# Claude PR review agent
+# IH Tek PR review agent
 
-An automated pull request reviewer that applies a written rulebook and gets
-quieter over time about the rules people keep dismissing.
+An automated pull request reviewer that applies a written rulebook, blocks the
+merge while it has findings against a PR, and gets quieter over time about the
+rules people keep dismissing.
 
 ## When it runs
 
-- A PR **into `main` or `dev`** is opened, reopened, or marked ready for review.
-  PRs targeting anything else are not reviewed.
-- Someone adds the **`review-again`** label to such a PR. The label is removed
-  again afterwards so it can be reapplied.
-- Someone with write access comments **`/review`** on it.
+On a PR **into `main` or `dev`** — PRs targeting anything else are not reviewed
+— when it is opened, reopened, marked ready for review, **or pushed to**. Plus,
+on demand:
 
-Deliberately **not** on `synchronize`. Pushing follow-up commits to an open PR
-does not re-review it, which keeps the free tier from being spent on
-work-in-progress. The cost is real and worth stating plainly: a review goes
-stale the moment the author pushes a fix, so a PR can carry a clean review of
-code that no longer exists. Re-request it with the label or the comment when the
-diff has moved enough to matter.
+- Someone adds the **`review-again`** label. It is removed again afterwards so
+  it can be reapplied.
+- Someone with write access comments **`/review`**.
+
+`synchronize` is included because this check blocks merges. A developer has to
+be able to clear a red review by pushing the fix; a blocking check with no
+obvious way to turn it green is how teams learn to route around a gate. The
+cost is budget — every push to an open PR spends up to 4 OpenRouter requests
+against a 50/day free tier. If that starts to bite, drop `synchronize` from the
+workflow and rely on the label, or top the account up.
+
+Every `pull_request` event runs the job, even ones that will do no work. That
+is deliberate: a required check which never reports leaves a PR unmergeable
+forever, so drafts, `skip-review`, and unrelated labels are handled _inside_
+the job, which exits cleanly and lets the check go green.
 
 Two caveats on the comment trigger. GitHub runs `issue_comment` workflows from
 the **default branch**, so `/review` only works once this workflow is merged to
-`main` — the label and the open/reopen triggers work from a PR branch straight
-away. And `/review` is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because
-without that gate any drive-by commenter could spend the day's request budget.
+`main` — the other triggers work from a PR branch straight away. And `/review`
+is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because without that gate any
+drive-by commenter could spend the day's request budget.
 
 ## How it works
 
@@ -38,13 +46,15 @@ Once triggered, a review is three steps:
    accept, and posts one review.
 
 Step 2 is the only provider-specific part. Anything that writes
-`findings.json` in the schema below works — the shipped alternative is
-`workflows/claude-pr-review.yml`, which uses `anthropics/claude-code-action@v1`
-and can read the surrounding source rather than only the diff. Swapping
-providers does not touch the rulebook, the gating, or the feedback loop.
+`findings.json` in the schema below works, so swapping providers does not touch
+the rulebook, the gating, or the feedback loop. The upstream package also
+shipped a `claude-pr-review.yml` using `anthropics/claude-code-action@v1`, which
+can read the surrounding source rather than only the diff; it was removed here
+in favour of OpenRouter, and is worth revisiting if the diff-only limits below
+prove too costly.
 
-The split between step 2 and step 3 is the whole design. Claude decides _what_
-is wrong; the script decides _what gets said_. That keeps the comment cap, the
+The split between step 2 and step 3 is the whole design. The model decides
+_what is wrong_; the script decides _what gets said_. That keeps the comment cap, the
 confidence thresholds, and the mute list as code rather than as polite requests
 in a prompt, and it means every posted comment carries a machine-readable
 marker tying it back to a rule.
@@ -232,11 +242,30 @@ node --test .github/review/scripts/test/*.test.mjs
 
 ## Deliberate limits
 
-**It never blocks a merge.** The review posts as `COMMENT`, and
-`post-review.mjs` exits zero even when it fails. Set
-`REQUEST_CHANGES_ON_BLOCKER: "1"` in the workflow if you want blockers to
-request changes — but note that a review from `GITHUB_TOKEN` does not satisfy a
-branch protection "required approvals" rule either way.
+**It blocks the merge when it finds something.** `post-review.mjs` exits
+non-zero while any finding stands, which fails the check; with branch
+protection requiring that check, the PR cannot merge. `BLOCK_MIN_SEVERITY`
+controls how severe a finding has to be to count — the default, `nit`, means
+anything at all. `BLOCK_ON_FINDINGS: '0'` makes the reviewer advisory again.
+
+Two properties of the gate are worth understanding, because they are what stop
+it becoming something people route around:
+
+- **Only findings block. Reviewer failures never do.** No API key, no diff,
+  unreadable output, provider outage, exhausted budget — all exit zero. A bad
+  day at OpenRouter must not be the reason nobody on the team can merge.
+- **The gate reasons about the code, not about the comments.** The blocking
+  decision is recomputed from every current finding, ignoring which ones earlier
+  runs already posted. Otherwise a second run on an unchanged PR would find
+  nothing "new" to say and let it through with every problem intact.
+
+Clearing a red review means pushing the fix (the check re-runs on
+`synchronize`), or re-requesting with the `review-again` label. `skip-review`
+bypasses the gate entirely and is the deliberate escape hatch.
+
+Note that a review posted by `GITHUB_TOKEN` does not satisfy a branch
+protection "required approvals" rule — the gate here is the _check_, not the
+review verdict, which is why `REQUEST_CHANGES_ON_BLOCKER` is not the mechanism.
 
 **Fork PRs on public repositories are skipped.** GitHub withholds secrets from
 those runs, so the review step cannot authenticate. This is a GitHub security

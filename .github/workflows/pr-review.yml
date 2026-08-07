@@ -19,7 +19,11 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, labeled]
+    # `synchronize` is here because this check BLOCKS merges. A developer has to
+    # be able to clear a failing review by pushing the fix; without it the only
+    # way out is the label, and a red check with no obvious way to make it green
+    # is how teams learn to route around a gate.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     # Base branch, i.e. what the PR merges INTO. PRs targeting anything else
     # (qa, staging, feature branches) are not reviewed.
     branches: [main, dev]
@@ -32,19 +36,16 @@ concurrency:
 
 jobs:
   review:
-    # Two ways in. The pull_request path is filtered by `branches:` above; the
-    # issue_comment path cannot be (that event has no branch context), so the
-    # base branch is checked in the Resolve step instead.
+    # Every pull_request event runs this job, even the ones that will do no
+    # work. That is deliberate: this is a REQUIRED check, and a required check
+    # that never reports leaves a PR unmergeable forever. Drafts, `skip-review`,
+    # and unrelated labels are therefore handled inside Resolve, which exits
+    # cleanly and lets the check go green, rather than skipping the job.
     #
     # `/review` is restricted to people with write access. Without that gate any
     # drive-by commenter could burn the day's request budget.
     if: >
-      (
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        !contains(github.event.pull_request.labels.*.name, 'skip-review') &&
-        (github.event.action != 'labeled' || github.event.label.name == 'review-again')
-      ) || (
+      github.event_name == 'pull_request' || (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != null &&
         startsWith(github.event.comment.body, '/review') &&
@@ -64,6 +65,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL_NAME: ${{ github.event.label.name }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
@@ -73,6 +76,13 @@ jobs:
             NUMBER="$PR_FROM_EVENT"
           else
             NUMBER="$ISSUE_NUMBER"
+          fi
+
+          # A label event for any label other than review-again is not a review
+          # request. Report green and spend nothing.
+          if [ "$ACTION" = "labeled" ] && [ "$LABEL_NAME" != "review-again" ]; then
+            echo "Labeled '${LABEL_NAME}', not a review request. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           # Read head/base from the API rather than the event payload so both
@@ -187,6 +197,14 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REQUEST_CHANGES_ON_BLOCKER: '0'
+          # Unresolved findings fail this step, which fails the check, which
+          # blocks the merge while branch protection requires it. Only findings
+          # do this — every reviewer failure path still exits zero, so a
+          # provider outage cannot wedge everyone's merges.
+          # Set to '0' to make the reviewer advisory again.
+          BLOCK_ON_FINDINGS: '1'
+          # Least severe finding that still blocks: blocker | major | minor | nit
+          BLOCK_MIN_SEVERITY: 'nit'
         run: node .github/review/scripts/post-review.mjs
 
       - name: Clear the review-again label

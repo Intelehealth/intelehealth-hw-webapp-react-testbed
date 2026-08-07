@@ -41,6 +41,19 @@ const DIFF_TRUNCATED = process.env.DIFF_TRUNCATED === 'true';
 const REQUEST_CHANGES_ON_BLOCKER =
   process.env.REQUEST_CHANGES_ON_BLOCKER === '1';
 
+/**
+ * When set, unresolved findings make this script exit non-zero, which fails the
+ * check and — with branch protection requiring it — blocks the merge.
+ *
+ * Only findings do this. Every infrastructure failure path (no API key, no
+ * diff, unreadable findings.json, a thrown error) still exits zero, because a
+ * provider outage must never be the reason nobody on the team can merge.
+ */
+const BLOCK_ON_FINDINGS = process.env.BLOCK_ON_FINDINGS !== '0';
+
+/** Least severe finding that still blocks. Default: anything at all. */
+const BLOCK_MIN_SEVERITY = process.env.BLOCK_MIN_SEVERITY || 'nit';
+
 const SEVERITY_LABEL = {
   blocker: '🔴 Blocker',
   major: '🟠 Major',
@@ -244,6 +257,21 @@ async function main() {
     `${kept.length} finding(s) passed the gate, ${dropped.length} dropped.`
   );
 
+  // What is wrong with this PR *right now*, independent of what earlier runs
+  // already said. `kept` excludes anything already posted, so a re-run where
+  // every problem still stands would otherwise look clean and let the merge
+  // through. The merge decision has to be about the code, not about which
+  // comments happen to be new.
+  const { kept: unresolved } = gateFindings(valid, rules, {
+    prNumber: PR_NUMBER,
+    maxComments: book.defaults?.maxCommentsPerPR ?? 12,
+    explorationPercent: book.defaults?.explorationPercent ?? 10,
+    alreadyPosted: new Set(),
+  });
+  const blocking = unresolved.filter(
+    f => SEVERITY_ORDER[f.severity] <= SEVERITY_ORDER[BLOCK_MIN_SEVERITY]
+  );
+
   // --- map to lines GitHub will accept ------------------------------------
   const files = await getPullFiles(REPO, PR_NUMBER);
   const lineIndex = new Map();
@@ -295,6 +323,7 @@ async function main() {
   // Nothing new to say and nothing already said: stay quiet.
   if (inline.length === 0 && outOfDiff.length === 0 && alreadyPosted.size > 0) {
     console.log('No new findings since the last run. Not posting.');
+    applyMergeGate(blocking);
     return;
   }
 
@@ -337,6 +366,41 @@ async function main() {
       console.error(`Fallback comment also failed: ${err2.message}`);
     }
   }
+
+  applyMergeGate(blocking);
+}
+
+/**
+ * Fail the check when the PR still has findings against it.
+ *
+ * Sets exitCode rather than calling process.exit so the review that was just
+ * posted is not lost to an early teardown.
+ */
+function applyMergeGate(blocking) {
+  if (!blocking.length) {
+    console.log('No unresolved findings. Merge gate is clear.');
+    return;
+  }
+  const counts = {};
+  for (const f of blocking) counts[f.severity] = (counts[f.severity] || 0) + 1;
+  const breakdown = Object.entries(counts)
+    .map(([sev, n]) => `${n} ${sev}`)
+    .join(', ');
+
+  if (!BLOCK_ON_FINDINGS) {
+    console.log(`${blocking.length} unresolved finding(s) (${breakdown}).`);
+    console.log('BLOCK_ON_FINDINGS is off, so this does not fail the check.');
+    return;
+  }
+
+  console.error(
+    `\n${blocking.length} unresolved finding(s) on this pull request: ${breakdown}.`
+  );
+  console.error(
+    'Address them, then re-request a review with the `review-again` label ' +
+      'or a `/review` comment. To merge anyway, add the `skip-review` label.'
+  );
+  process.exitCode = 1;
 }
 
 main().catch(err => {
