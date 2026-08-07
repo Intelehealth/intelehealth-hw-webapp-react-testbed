@@ -7,15 +7,14 @@ name: PR Review
 # step knows it is talking to OpenRouter.
 #
 # When this runs:
-#   - a PR into main or dev is opened, reopened, or marked ready for review
+#   - a PR into main or dev is opened, reopened, marked ready for review, or
+#     pushed to
 #   - someone adds the `review-again` label to such a PR
 #   - someone with write access comments `/review` on it
 #
-# Deliberately NOT on `synchronize`. Pushing follow-up commits to an open PR
-# does not re-review it, which keeps the OpenRouter free tier (50 requests/day,
-# 4 per review) from being spent on work-in-progress. The cost is that a review
-# goes stale as soon as the author pushes a fix — re-request it with the label
-# or the comment when the diff has moved enough to be worth another pass.
+# This check BLOCKS merges: unresolved findings fail it, and branch protection
+# requires it. Only findings do that — every reviewer failure path still exits
+# zero, so a provider outage cannot stop the team merging.
 
 on:
   pull_request:
