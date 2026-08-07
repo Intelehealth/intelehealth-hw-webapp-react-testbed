@@ -13,8 +13,9 @@
  *   - a line outside the diff cannot 422 the whole review and lose the rest of
  *     the comments with it.
  *
- * Never exits non-zero for review content. A broken reviewer must not break
- * anyone's CI.
+ * Exits non-zero when the PR should not merge: either findings stand against
+ * it, or the review did not actually complete. Both are deliberate — see
+ * BLOCK_ON_FINDINGS and REQUIRE_COMPLETE_REVIEW below.
  */
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -45,14 +46,28 @@ const REQUEST_CHANGES_ON_BLOCKER =
  * When set, unresolved findings make this script exit non-zero, which fails the
  * check and — with branch protection requiring it — blocks the merge.
  *
- * Only findings do this. Every infrastructure failure path (no API key, no
- * diff, unreadable findings.json, a thrown error) still exits zero, because a
- * provider outage must never be the reason nobody on the team can merge.
+ * This covers findings specifically. A review that never ran is handled by
+ * REQUIRE_COMPLETE_REVIEW below — the two are separate because they mean
+ * different things to whoever has to clear the check.
  */
 const BLOCK_ON_FINDINGS = process.env.BLOCK_ON_FINDINGS !== '0';
 
 /** Least severe finding that still blocks. Default: anything at all. */
 const BLOCK_MIN_SEVERITY = process.env.BLOCK_MIN_SEVERITY || 'nit';
+
+/**
+ * When set, a review that did not actually complete fails the check too.
+ *
+ * Without this, a model that returns a well-formed empty result — because it
+ * gave up, or because half the diff never fit in the budget — is
+ * indistinguishable from a genuinely clean review, and quietly unblocks the
+ * merge. A gate that green-lights unread code is not a gate.
+ *
+ * The cost is that a provider outage holds merges until someone re-requests a
+ * review or applies `skip-review`. That is the deliberate trade: the escape
+ * hatch is explicit and visible, rather than a silent pass.
+ */
+const REQUIRE_COMPLETE_REVIEW = process.env.REQUIRE_COMPLETE_REVIEW !== '0';
 
 const SEVERITY_LABEL = {
   blocker: '🔴 Blocker',
@@ -208,6 +223,7 @@ async function main() {
     console.log(
       'No findings.json was produced — the review step likely failed. Nothing to post.'
     );
+    failIncomplete('the review step produced no output at all');
     return;
   }
 
@@ -216,8 +232,17 @@ async function main() {
     payload = JSON.parse(readFileSync(FINDINGS_PATH, 'utf8'));
   } catch (err) {
     console.error(`findings.json is not valid JSON: ${err.message}`);
+    failIncomplete('the review step produced unreadable output');
     return;
   }
+
+  // An explicit false means the generator knows it did not read the whole
+  // diff. Absent (an older findings.json) is treated as reviewed, so this
+  // cannot retroactively block PRs written before the flag existed.
+  const incomplete =
+    payload.reviewed === false
+      ? payload.inconclusive || 'the review did not complete'
+      : null;
 
   const book = JSON.parse(readFileSync(RULES_PATH, 'utf8'));
   const rules = book.rules;
@@ -323,7 +348,7 @@ async function main() {
   // Nothing new to say and nothing already said: stay quiet.
   if (inline.length === 0 && outOfDiff.length === 0 && alreadyPosted.size > 0) {
     console.log('No new findings since the last run. Not posting.');
-    applyMergeGate(blocking);
+    applyMergeGate(blocking, incomplete);
     return;
   }
 
@@ -367,7 +392,7 @@ async function main() {
     }
   }
 
-  applyMergeGate(blocking);
+  applyMergeGate(blocking, incomplete);
 }
 
 /**
@@ -376,7 +401,33 @@ async function main() {
  * Sets exitCode rather than calling process.exit so the review that was just
  * posted is not lost to an early teardown.
  */
-function applyMergeGate(blocking) {
+function failIncomplete(reason) {
+  if (!REQUIRE_COMPLETE_REVIEW) {
+    console.log(
+      `Review incomplete (${reason}), but REQUIRE_COMPLETE_REVIEW is off.`
+    );
+    return;
+  }
+  console.error(`\nThe review did not complete: ${reason}.`);
+  console.error(
+    'An absence of findings therefore does not mean this code is clean — it ' +
+      'means it was not read. Re-request a review with the `review-again` ' +
+      'label, or add `skip-review` to merge without one.'
+  );
+  process.exitCode = 1;
+}
+
+function applyMergeGate(blocking, incomplete) {
+  if (incomplete) {
+    // Report the findings we did get, then fail for the ones we may not have.
+    if (blocking.length) {
+      console.error(
+        `${blocking.length} finding(s) posted before the review ran out.`
+      );
+    }
+    failIncomplete(incomplete);
+    return;
+  }
   if (!blocking.length) {
     console.log('No unresolved findings. Merge gate is clear.');
     return;

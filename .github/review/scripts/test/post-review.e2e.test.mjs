@@ -323,18 +323,86 @@ test('BLOCK_MIN_SEVERITY lets nits through while majors still block', async () =
   }
 });
 
-test('a broken reviewer never blocks the merge', async () => {
-  // A provider outage must not be the reason nobody on the team can merge.
+// --- incomplete reviews ----------------------------------------------------
+
+test('a review that did not complete does not pass the gate', async () => {
+  // The hole this closes: a model that returns a well-formed empty result
+  // because it gave up looks identical to a genuinely clean review, and would
+  // otherwise unblock the merge on code nothing ever read.
+  const stub = await startStub();
+  try {
+    const { exitCode, stderr } = await runPostReview(
+      {
+        summary: 'No code was provided for review.',
+        findings: [],
+        reviewed: false,
+        inconclusive: 'the model reported that it did not see the code',
+      },
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 1, 'an unread diff must not read as clean');
+    assert.match(stderr, /did not complete/);
+    assert.match(stderr, /did not see the code/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a completed clean review still passes', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(
+      { summary: 'Looks fine.', findings: [], reviewed: true },
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('findings.json without the flag is treated as reviewed', async () => {
+  // Older output has no `reviewed` key. Absent must not mean "incomplete", or
+  // upgrading would retroactively block every open PR.
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(findingsPayload([]), stub, {
+      BLOCK_ON_FINDINGS: '1',
+    });
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a missing or unreadable findings.json blocks rather than passes', async () => {
   for (const input of ['{ not json', null]) {
     const stub = await startStub();
     try {
-      const { exitCode } = await runPostReview(input, stub, {
+      const { exitCode, stderr } = await runPostReview(input, stub, {
         BLOCK_ON_FINDINGS: '1',
       });
-      assert.equal(exitCode, 0, 'infrastructure failure must not block');
+      assert.equal(exitCode, 1, 'no output means nothing was reviewed');
+      assert.match(stderr, /did not complete/);
     } finally {
       stub.server.close();
     }
+  }
+});
+
+test('REQUIRE_COMPLETE_REVIEW=0 restores the advisory behaviour', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(
+      { summary: 'gave up', findings: [], reviewed: false },
+      stub,
+      { BLOCK_ON_FINDINGS: '1', REQUIRE_COMPLETE_REVIEW: '0' }
+    );
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
   }
 });
 

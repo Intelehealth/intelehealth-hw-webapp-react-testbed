@@ -247,18 +247,28 @@ node --test .github/review/scripts/test/*.test.mjs
 
 ## Deliberate limits
 
-**It blocks the merge when it finds something.** `post-review.mjs` exits
-non-zero while any finding stands, which fails the check; with branch
-protection requiring that check, the PR cannot merge. `BLOCK_MIN_SEVERITY`
+**It blocks the merge when it finds something — or when it could not look.**
+`post-review.mjs` exits non-zero while any finding stands, and also when the
+review did not actually complete; with branch protection requiring that check,
+the PR cannot merge. `BLOCK_MIN_SEVERITY`
 controls how severe a finding has to be to count — the default, `nit`, means
 anything at all. `BLOCK_ON_FINDINGS: '0'` makes the reviewer advisory again.
 
 Two properties of the gate are worth understanding, because they are what stop
 it becoming something people route around:
 
-- **Only findings block. Reviewer failures never do.** No API key, no diff,
-  unreadable output, provider outage, exhausted budget — all exit zero. A bad
-  day at OpenRouter must not be the reason nobody on the team can merge.
+- **An unread diff never reads as clean.** An empty findings array means one
+  of two very different things: the code is clean, or the model gave up. Those
+  are indistinguishable to branch protection, so the generator records whether
+  it actually engaged — batches failed, files dropped for budget, a summary
+  admitting it saw no code, or unparseable output followed by nothing — and an
+  incomplete review fails the check with a different message from a review that
+  found problems. Observed in practice: a PR here went green on
+  `No code was provided for review.` before this existed.
+  `REQUIRE_COMPLETE_REVIEW: '0'` restores the older, more forgiving behaviour.
+  The cost is that a provider outage holds merges until someone re-requests a
+  review or applies `skip-review` — an explicit, visible escape hatch rather
+  than a silent pass.
 - **The gate reasons about the code, not about the comments.** The blocking
   decision is recomputed from every current finding, ignoring which ones earlier
   runs already posted. Otherwise a second run on an unchanged PR would find
