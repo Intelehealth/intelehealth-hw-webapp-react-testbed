@@ -77,15 +77,20 @@ This project uses **Husky** to enforce code quality standards before each commit
 
 ## 🤖 Automated PR Review
 
-Pull requests are reviewed against a written rulebook at [.github/review/review-rules.md](.github/review/review-rules.md) — 56 rules covering security, PHI handling, data access, async correctness, realtime, frontend, TypeScript, tests, and ops.
+Pull requests into `main` or `dev` are reviewed against a written rulebook at [.github/review/review-rules.md](.github/review/review-rules.md) — 57 rules covering security, PHI handling, data access, async correctness, realtime, frontend, TypeScript, tests, and ops.
 
-**When it runs** ([.github/workflows/pr-review.yml](.github/workflows/pr-review.yml)):
+**You ask for the review** ([.github/workflows/pr-review.yml](.github/workflows/pr-review.yml)). Opening a PR or pushing to one costs nothing — add the **`review-again`** label, or comment **`/review`**.
 
-- a non-draft PR **into `main` or `dev`** is opened, reopened, or marked ready for review
-- someone adds the **`review-again`** label (removed afterwards, so it can be reapplied)
-- someone with write access comments **`/review`**
+The check still reports on every event, because it gates the merge:
 
-It does **not** re-review on every push. That keeps the free-tier budget for changes worth reading, at the cost of a review going stale once the author pushes a fix — ask for a fresh one with the label or the comment.
+| Event                             | Check                         |
+| --------------------------------- | ----------------------------- |
+| PR opened / reopened / ready      | 🔴 review not requested       |
+| Push to an open PR                | 🔴 code changed               |
+| `review-again` label or `/review` | 🔴 on findings, 🟢 when clean |
+| Draft, `skip-review`, other base  | 🟢 gate bypassed              |
+
+**A push always sends the check back to red**, on purpose: a review that passed against code you have since changed should not keep the merge unblocked.
 
 **How it runs:**
 
@@ -99,7 +104,7 @@ It does **not** re-review on every push. That keeps the free-tier budget for cha
 
 **Required setup:** an `OPENROUTER_API_KEY` repository secret. Turn training **off** for free models in OpenRouter's privacy settings before enabling — diffs of clinical code can carry table names, field names, and fixture data.
 
-**It blocks the merge.** While the reviewer has an unresolved finding against a PR, its check is red and branch protection will not let the PR merge. Push the fix and the check re-runs, or re-request with the `review-again` label.
+**It blocks the merge.** While the reviewer has an unresolved finding against a PR, its check is red and branch protection will not let the PR merge. Fix the findings, then ask for a fresh review.
 
 Only _findings_ block. Every reviewer failure — no API key, provider outage, exhausted budget — passes the check, so a bad day at OpenRouter never stops the team merging.
 

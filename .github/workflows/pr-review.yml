@@ -2,29 +2,33 @@ name: PR Review
 
 # Automated PR review using OpenRouter free models.
 #
-# Three steps — prepare the diff, generate findings, post them. post-review.mjs,
-# the rule gating and the feedback loop are provider-agnostic: only the middle
-# step knows it is talking to OpenRouter.
+# The model only runs when somebody asks for it — by adding the `review-again`
+# label, or by commenting `/review`. Opening a PR or pushing to one costs
+# nothing.
 #
-# When this runs:
-#   - a PR into main or dev is opened, reopened, marked ready for review, or
-#     pushed to
-#   - someone adds the `review-again` label to such a PR
-#   - someone with write access comments `/review` on it
+# But the check still reports on every pull_request event, because it is a
+# REQUIRED check and a required check that never reports leaves a PR
+# unmergeable forever. So:
 #
-# This check BLOCKS merges: unresolved findings fail it, and branch protection
-# requires it. Only findings do that — every reviewer failure path still exits
-# zero, so a provider outage cannot stop the team merging.
+#   PR opened / reopened / ready   -> check RED  "review not requested"   0 requests
+#   push to an open PR             -> check RED  "code changed"           0 requests
+#   `review-again` label / /review -> full review, RED on findings        <=4 requests
+#                                     or GREEN when clean
+#   draft / skip-review / other base -> check GREEN, gate bypassed        0 requests
+#
+# A push always sends the check back to red. That is the point: a review that
+# passed against code which has since changed must not keep a merge unblocked.
+#
+# `/review` does not review directly — it adds the label. GitHub associates an
+# issue_comment workflow run with the default branch rather than the PR head, so
+# a check published from one would never attach to the PR. Going through the
+# label keeps a single code path with the correct commit association.
 
 on:
   pull_request:
-    # `synchronize` is here because this check BLOCKS merges. A developer has to
-    # be able to clear a failing review by pushing the fix; without it the only
-    # way out is the label, and a red check with no obvious way to make it green
-    # is how teams learn to route around a gate.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     # Base branch, i.e. what the PR merges INTO. PRs targeting anything else
-    # (qa, staging, feature branches) are not reviewed.
+    # (qa, staging, feature branches) are not reviewed and are not gated.
     branches: [main, dev]
   issue_comment:
     types: [created]
@@ -34,22 +38,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review:
-    # Every pull_request event runs this job, even the ones that will do no
-    # work. That is deliberate: this is a REQUIRED check, and a required check
-    # that never reports leaves a PR unmergeable forever. Drafts, `skip-review`,
-    # and unrelated labels are therefore handled inside Resolve, which exits
-    # cleanly and lets the check go green, rather than skipping the job.
-    #
-    # `/review` is restricted to people with write access. Without that gate any
-    # drive-by commenter could burn the day's request budget.
+  # `/review` on a pull request just applies the label. The labeled event then
+  # does the real work below.
+  request:
     if: >
-      github.event_name == 'pull_request' || (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request != null &&
-        startsWith(github.event.comment.body, '/review') &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-      )
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Request a review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${REPO}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes --silent || true
+          gh issue edit "$NUMBER" --repo "$REPO" --add-label review-again
+          echo "Requested a review on #${NUMBER} via the review-again label."
+
+  review:
+    # Every pull_request event runs this job, including the ones that do no
+    # work. A required check must always report, or the PR can never merge.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -58,95 +77,66 @@ jobs:
       issues: write
 
     steps:
-      - name: Resolve pull request
+      - name: Decide what this run should do
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           LABEL_NAME: ${{ github.event.label.name }}
-          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
-          if [ "$EVENT" = "pull_request" ]; then
-            NUMBER="$PR_FROM_EVENT"
-          else
-            NUMBER="$ISSUE_NUMBER"
-          fi
-
-          # A label event for any label other than review-again is not a review
-          # request. Report green and spend nothing.
-          if [ "$ACTION" = "labeled" ] && [ "$LABEL_NAME" != "review-again" ]; then
-            echo "Labeled '${LABEL_NAME}', not a review request. Skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-
-          # Read head/base from the API rather than the event payload so both
-          # entry points agree, and so a comment made minutes ago still resolves
-          # to the PR's current head.
           DATA=$(gh pr view "$NUMBER" --repo "$REPO" \
             --json headRefOid,baseRefOid,baseRefName,isDraft,labels,state)
 
           BASE_REF=$(echo "$DATA" | jq -r .baseRefName)
           IS_DRAFT=$(echo "$DATA" | jq -r .isDraft)
           STATE=$(echo "$DATA" | jq -r .state)
-          SKIP=$(echo "$DATA" | jq -r '[.labels[].name] | index("skip-review") // "" ')
+          SKIP=$(echo "$DATA" | jq -r '[.labels[].name] | index("skip-review") // ""')
 
-          # The `branches:` filter does not apply to issue_comment, so enforce
-          # the same rule here for the comment path.
-          if [ "$BASE_REF" != "main" ] && [ "$BASE_REF" != "dev" ]; then
-            echo "PR #${NUMBER} targets '${BASE_REF}', not main or dev. Skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ "$STATE" != "OPEN" ]; then
-            echo "PR #${NUMBER} is ${STATE}. Skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ "$IS_DRAFT" = "true" ]; then
-            echo "PR #${NUMBER} is a draft. Skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ -n "$SKIP" ]; then
-            echo "PR #${NUMBER} carries skip-review. Skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          # --- bypass: report green, spend nothing -----------------------------
+          if [ "$STATE" != "OPEN" ] || [ "$IS_DRAFT" = "true" ] || [ -n "$SKIP" ]; then
+            echo "Not gating #${NUMBER} (state=${STATE} draft=${IS_DRAFT} skip=${SKIP:-no})."
+            echo "mode=bypass" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          {
-            echo "run=true"
-            echo "number=${NUMBER}"
-            echo "head_sha=$(echo "$DATA" | jq -r .headRefOid)"
-            echo "base_sha=$(echo "$DATA" | jq -r .baseRefOid)"
-          } >> "$GITHUB_OUTPUT"
+          # --- review: somebody asked for one ----------------------------------
+          if [ "$ACTION" = "labeled" ] && [ "$LABEL_NAME" = "review-again" ]; then
+            {
+              echo "mode=review"
+              echo "number=${NUMBER}"
+              echo "head_sha=$(echo "$DATA" | jq -r .headRefOid)"
+              echo "base_sha=$(echo "$DATA" | jq -r .baseRefOid)"
+            } >> "$GITHUB_OUTPUT"
+            echo "Reviewing #${NUMBER} into ${BASE_REF}."
+            exit 0
+          fi
 
-          echo "Reviewing PR #${NUMBER} into ${BASE_REF}."
+          # --- a label we do not act on: leave the check as it was --------------
+          if [ "$ACTION" = "labeled" ]; then
+            echo "Labeled '${LABEL_NAME}'. Not a review request."
+            echo "mode=bypass" >> "$GITHUB_OUTPUT"; exit 0
+          fi
 
-      - name: Acknowledge the request
-        if: steps.pr.outputs.run == 'true' && github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api -X POST \
-            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
-            -f content=eyes --silent || true
+          # --- pending: no review has been requested for this code -------------
+          echo "mode=pending" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        if: steps.pr.outputs.run == 'true'
+        if: steps.pr.outputs.mode == 'review'
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
-        if: steps.pr.outputs.run == 'true'
+        if: steps.pr.outputs.mode == 'review'
         with:
           node-version: '20'
 
       - name: Prepare diff
-        if: steps.pr.outputs.run == 'true'
-        id: prep
+        if: steps.pr.outputs.mode == 'review'
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -164,32 +154,23 @@ jobs:
             > .claude-review/pr.diff
 
           git diff --name-status "$MERGE_BASE" "$HEAD_SHA" > .claude-review/changed-files.txt
-
-          BYTES=$(wc -c < .claude-review/pr.diff)
-          echo "diff_bytes=$BYTES" >> "$GITHUB_OUTPUT"
-          echo "Diff: ${BYTES} bytes, $(wc -l < .claude-review/changed-files.txt) file(s)."
+          echo "Diff: $(wc -c < .claude-review/pr.diff) bytes, $(wc -l < .claude-review/changed-files.txt) file(s)."
 
       - name: Generate findings
-        if: steps.pr.outputs.run == 'true'
+        if: steps.pr.outputs.mode == 'review'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Optional. Preferred models, best first — any that are no longer free
-          # are skipped and the script falls back to whatever currently is.
-          # Leave unset and it picks structured-output-capable free models,
-          # largest context first.
           OPENROUTER_MODELS: ${{ vars.OPENROUTER_MODELS }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           # Passed as env, not interpolated into a shell command — a PR title is
           # attacker-controlled text and must never reach a `run:` block inline.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          # Each batch is one OpenRouter request. The free tier allows 50 per
-          # day, or 1000 once the account has bought $10 of credit.
           MAX_REQUESTS: '4'
         run: node .github/review/scripts/openrouter-review.mjs
 
       - name: Post review
-        if: steps.pr.outputs.run == 'true'
+        if: steps.pr.outputs.mode == 'review'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -197,10 +178,8 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REQUEST_CHANGES_ON_BLOCKER: '0'
           # Unresolved findings fail this step, which fails the check, which
-          # blocks the merge while branch protection requires it. Only findings
-          # do this — every reviewer failure path still exits zero, so a
-          # provider outage cannot wedge everyone's merges.
-          # Set to '0' to make the reviewer advisory again.
+          # blocks the merge. Only findings do this — every reviewer failure
+          # path still exits zero, so a provider outage cannot wedge merges.
           BLOCK_ON_FINDINGS: '1'
           # Least severe finding that still blocks: blocker | major | minor | nit
           BLOCK_MIN_SEVERITY: 'nit'
@@ -209,19 +188,39 @@ jobs:
       - name: Clear the review-again label
         # Removed so it can be applied again. A label that stays put can only
         # trigger once, which is a confusing way for an on-demand switch to fail.
-        if: always() && github.event.action == 'labeled' && github.event.label.name == 'review-again'
+        if: always() && steps.pr.outputs.mode == 'review'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh api -X DELETE \
-            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/review-again" \
+            "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/labels/review-again" \
             --silent || true
 
       - name: Upload artifacts
-        if: always() && steps.pr.outputs.run == 'true'
+        if: always() && steps.pr.outputs.mode == 'review'
         uses: actions/upload-artifact@v4
         with:
           name: review-${{ steps.pr.outputs.number }}
           path: .claude-review/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: No review has been requested for this code
+        if: steps.pr.outputs.mode == 'pending'
+        run: |
+          echo "::error title=Review not requested::This pull request has not been reviewed at its current commit."
+          cat <<'MSG'
+          The automated review has not run against this code.
+
+          Ask for one, and this check turns green if it comes back clean:
+
+            * add the `review-again` label, or
+            * comment `/review`
+
+          Pushing new commits sends this check back to red on purpose — a review
+          that passed against code you have since changed should not keep the
+          merge unblocked.
+
+          To merge without a review, add the `skip-review` label.
+          MSG
+          exit 1

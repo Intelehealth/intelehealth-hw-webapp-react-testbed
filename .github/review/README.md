@@ -6,31 +6,36 @@ rules people keep dismissing.
 
 ## When it runs
 
-On a PR **into `main` or `dev`** — PRs targeting anything else are not reviewed
-— when it is opened, reopened, marked ready for review, **or pushed to**. Plus,
-on demand:
+**The model only runs when somebody asks for it.** Opening a PR or pushing to
+one costs nothing. Ask by adding the **`review-again`** label, or by commenting
+**`/review`**.
 
-- Someone adds the **`review-again`** label. It is removed again afterwards so
-  it can be reapplied.
-- Someone with write access comments **`/review`**.
+The check, however, reports on every `pull_request` event, because it is a
+required check and a required check that never reports leaves a PR unmergeable
+forever:
 
-`synchronize` is included because this check blocks merges. A developer has to
-be able to clear a red review by pushing the fix; a blocking check with no
-obvious way to turn it green is how teams learn to route around a gate. The
-cost is budget — every push to an open PR spends up to 4 OpenRouter requests
-against a 50/day free tier. If that starts to bite, drop `synchronize` from the
-workflow and rely on the label, or top the account up.
+| Event                             | Check                         | Requests |
+| --------------------------------- | ----------------------------- | -------- |
+| PR opened / reopened / ready      | 🔴 review not requested       | 0        |
+| Push to an open PR                | 🔴 code changed               | 0        |
+| `review-again` label or `/review` | 🔴 on findings, 🟢 when clean | ≤ 4      |
+| Draft, `skip-review`, other base  | 🟢 gate bypassed              | 0        |
 
-Every `pull_request` event runs the job, even ones that will do no work. That
-is deliberate: a required check which never reports leaves a PR unmergeable
-forever, so drafts, `skip-review`, and unrelated labels are handled _inside_
-the job, which exits cleanly and lets the check go green.
+**A push always sends the check back to red.** That is the point: a review
+which passed against code you have since changed must not keep the merge
+unblocked. Ask for a fresh one after pushing.
 
-Two caveats on the comment trigger. GitHub runs `issue_comment` workflows from
-the **default branch**, so `/review` only works once this workflow is merged to
-`main` — the other triggers work from a PR branch straight away. And `/review`
-is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because without that gate any
-drive-by commenter could spend the day's request budget.
+`skip-review` bypasses the gate entirely and is the deliberate escape hatch.
+
+`/review` does not review directly — it adds the label, and the `labeled` event
+does the work. GitHub associates an `issue_comment` workflow run with the
+**default branch** rather than the PR head, so a check published from one would
+never attach to the PR; routing through the label keeps a single code path with
+the correct commit association. It also means `/review` only works once this
+workflow reaches `main`, while the label works from a PR branch straight away.
+
+`/review` is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because without
+that gate any drive-by commenter could spend the day's request budget.
 
 ## How it works
 
