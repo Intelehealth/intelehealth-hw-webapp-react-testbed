@@ -110,7 +110,7 @@ Only _findings_ block. Every reviewer failure — no API key, provider outage, e
 
 **Opting out:** add the `skip-review` label. That bypasses the gate entirely and is the deliberate escape hatch when a finding is wrong or not worth fixing now.
 
-**Note:** `/review` only works once this is merged to `main` — GitHub runs comment-triggered workflows from the default branch. The label and the open/reopen triggers work from a PR branch immediately.
+**Note:** `/review` only works once this is merged to `main` — GitHub runs comment-triggered workflows from the default branch, so a comment on a PR branch cannot reach this workflow. The `review-again` label works from a PR branch immediately, and `/review` is only a shortcut for applying it.
 
 Adding or removing a rule means editing `review-rules.md` and running `node .github/review/scripts/sync-rules.mjs --write`. CI fails any PR where the rulebook and `rules.json` disagree. Full design notes: [.github/review/README.md](.github/review/README.md).
 
