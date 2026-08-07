@@ -73,7 +73,8 @@ export function evidenceCount(stats) {
  */
 export function computeState(weight, n) {
   if (n >= MUTE_MIN_EVIDENCE && weight < MUTE_WEIGHT) return 'muted';
-  if (n >= PROBATION_MIN_EVIDENCE && weight < PROBATION_WEIGHT) return 'probation';
+  if (n >= PROBATION_MIN_EVIDENCE && weight < PROBATION_WEIGHT)
+    return 'probation';
   return 'active';
 }
 
@@ -162,8 +163,14 @@ export function gateFindings(findings, rules, opts) {
       }
     }
 
-    if (rule.state === 'probation' && SEVERITY_ORDER[f.severity] > SEVERITY_ORDER.major) {
-      dropped.push({ finding: f, reason: 'rule on probation; only blocker/major posted' });
+    if (
+      rule.state === 'probation' &&
+      SEVERITY_ORDER[f.severity] > SEVERITY_ORDER.major
+    ) {
+      dropped.push({
+        finding: f,
+        reason: 'rule on probation; only blocker/major posted',
+      });
       continue;
     }
 
@@ -190,7 +197,7 @@ export function gateFindings(findings, rules, opts) {
   kept.sort(
     (a, b) =>
       (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9) ||
-      b._score - a._score,
+      b._score - a._score
   );
 
   const overflow = kept.slice(maxComments);
@@ -245,13 +252,18 @@ export function rebuildRules(rules, outcomes, now) {
     const rule = next[o.ruleId];
     if (!rule) continue;
     const bucket =
-      o.outcome === 'accepted' ? 'accepted' : o.outcome === 'rejected' ? 'rejected' : 'ignored';
+      o.outcome === 'accepted'
+        ? 'accepted'
+        : o.outcome === 'rejected'
+          ? 'rejected'
+          : 'ignored';
     rule.stats[bucket] += decayFactor(o.at, now);
   }
 
   const changes = [];
   for (const [ruleId, rule] of Object.entries(next)) {
-    for (const k of ['accepted', 'rejected', 'ignored']) rule.stats[k] = round3(rule.stats[k]);
+    for (const k of ['accepted', 'rejected', 'ignored'])
+      rule.stats[k] = round3(rule.stats[k]);
 
     const before = { weight: rules[ruleId].weight, state: rules[ruleId].state };
     rule.weight = computeWeight(rule.stats);

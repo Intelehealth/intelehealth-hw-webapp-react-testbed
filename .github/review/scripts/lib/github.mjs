@@ -8,7 +8,8 @@
  */
 
 const API = process.env.GITHUB_API_URL || 'https://api.github.com';
-const GRAPHQL = process.env.GITHUB_GRAPHQL_URL || 'https://api.github.com/graphql';
+const GRAPHQL =
+  process.env.GITHUB_GRAPHQL_URL || 'https://api.github.com/graphql';
 
 function token() {
   const t = process.env.GITHUB_TOKEN;
@@ -25,7 +26,7 @@ function baseHeaders() {
   };
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /**
  * REST request with retry on 5xx and secondary-rate-limit responses.
@@ -61,11 +62,17 @@ export async function rest(path, opts = {}) {
       res.status === 429 ||
       (res.status === 403 && /rate limit|abuse|secondary/i.test(text));
 
-    lastErr = new Error(`${method} ${url} -> ${res.status}: ${text.slice(0, 600)}`);
+    lastErr = new Error(
+      `${method} ${url} -> ${res.status}: ${text.slice(0, 600)}`
+    );
     if (!retryable || attempt === retries) throw lastErr;
 
     const retryAfter = Number(res.headers.get('retry-after'));
-    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2 ** attempt * 1000);
+    await sleep(
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 2 ** attempt * 1000
+    );
   }
   throw lastErr;
 }
@@ -73,7 +80,9 @@ export async function rest(path, opts = {}) {
 /** Follow `Link: rel="next"` until exhausted. */
 export async function restAll(path, { max = 1000 } = {}) {
   const out = [];
-  let url = path.includes('?') ? `${path}&per_page=100` : `${path}?per_page=100`;
+  let url = path.includes('?')
+    ? `${path}&per_page=100`
+    : `${path}?per_page=100`;
   while (url && out.length < max) {
     const { data, link } = await rest(url);
     if (!Array.isArray(data)) break;
@@ -93,7 +102,9 @@ export async function graphql(query, variables = {}) {
   });
   const json = await res.json();
   if (!res.ok || json.errors) {
-    throw new Error(`GraphQL error: ${JSON.stringify(json.errors || json).slice(0, 600)}`);
+    throw new Error(
+      `GraphQL error: ${JSON.stringify(json.errors || json).slice(0, 600)}`
+    );
   }
   return json.data;
 }
@@ -142,7 +153,9 @@ export async function getReviewComments(repo, prNumber) {
 
 /** Reactions on a single PR review comment. */
 export async function getCommentReactions(repo, commentId) {
-  return restAll(`/repos/${repo}/pulls/comments/${commentId}/reactions`, { max: 100 });
+  return restAll(`/repos/${repo}/pulls/comments/${commentId}/reactions`, {
+    max: 100,
+  });
 }
 
 /**
@@ -151,7 +164,11 @@ export async function getCommentReactions(repo, commentId) {
  * @param {number|string} prNumber
  * @param {{commitId:string, body:string, event:'COMMENT'|'REQUEST_CHANGES', comments:Array<object>}} opts
  */
-export async function createReview(repo, prNumber, { commitId, body, event, comments }) {
+export async function createReview(
+  repo,
+  prNumber,
+  { commitId, body, event, comments }
+) {
   const { data } = await rest(`/repos/${repo}/pulls/${prNumber}/reviews`, {
     method: 'POST',
     body: { commit_id: commitId, body, event, comments },

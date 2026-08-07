@@ -43,8 +43,8 @@ Step 2 is the only provider-specific part. Anything that writes
 and can read the surrounding source rather than only the diff. Swapping
 providers does not touch the rulebook, the gating, or the feedback loop.
 
-The split between step 2 and step 3 is the whole design. Claude decides *what*
-is wrong; the script decides *what gets said*. That keeps the comment cap, the
+The split between step 2 and step 3 is the whole design. Claude decides _what_
+is wrong; the script decides _what gets said_. That keeps the comment cap, the
 confidence thresholds, and the mute list as code rather than as polite requests
 in a prompt, and it means every posted comment carries a machine-readable
 marker tying it back to a rule.
@@ -60,15 +60,15 @@ Each comment ends with a hidden marker:
 Weekly, `scripts/tune-rules.mjs` walks recent PRs, finds those markers, and
 works out how humans actually responded:
 
-| Signal | Outcome |
-| --- | --- |
-| 👎 reaction | rejected |
-| 👍 reaction | accepted |
-| Reply matching a dismissal phrase ("false positive", "by design", …) | rejected |
-| Reply matching an agreement phrase ("good catch", "fixed", …) | accepted |
-| The flagged code changed after the comment (comment went outdated) | accepted |
-| PR closed with no response at all | ignored (weak negative) |
-| PR still open with no response | not scored yet |
+| Signal                                                               | Outcome                 |
+| -------------------------------------------------------------------- | ----------------------- |
+| 👎 reaction                                                          | rejected                |
+| 👍 reaction                                                          | accepted                |
+| Reply matching a dismissal phrase ("false positive", "by design", …) | rejected                |
+| Reply matching an agreement phrase ("good catch", "fixed", …)        | accepted                |
+| The flagged code changed after the comment (comment went outdated)   | accepted                |
+| PR closed with no response at all                                    | ignored (weak negative) |
+| PR still open with no response                                       | not scored yet          |
 
 Each rule carries a Beta posterior over "does this rule produce comments people
 act on". The prior is worth three observations centred on 0.7 — a hand-written
@@ -78,11 +78,11 @@ rule is presumed useful, but not strongly. The posterior mean is the rule's
 A finding is posted when `confidence × weight` clears a per-severity gate:
 
 | Severity | Gate |
-| --- | --- |
-| blocker | 0.30 |
-| major | 0.36 |
-| minor | 0.42 |
-| nit | 0.50 |
+| -------- | ---- |
+| blocker  | 0.30 |
+| major    | 0.36 |
+| minor    | 0.42 |
+| nit      | 0.50 |
 
 Nits have to be more certain than blockers to earn a comment, which is the
 right trade when reviewer attention is the scarce resource.
@@ -114,19 +114,19 @@ are about to go quiet, and why.
 
 ## Files
 
-| Path | What it is |
-| --- | --- |
-| `review-rules.md` | The rulebook. Human-written. Edit this. |
-| `rules.json` | Learned state: weight, status, and evidence per rule. Machine-written. |
-| `feedback-ledger.json` | Every scored comment. The source of truth for weights. |
-| `findings.schema.json` | Contract between the model and the posting script. |
-| `scripts/openrouter-review.mjs` | Produces findings via OpenRouter free models. |
-| `scripts/post-review.mjs` | Gates findings and posts the review. |
-| `scripts/tune-rules.mjs` | The learning loop. |
-| `scripts/sync-rules.mjs` | Keeps the markdown and the JSON in agreement. |
-| `scripts/lib/scoring.mjs` | Pure scoring logic. All of it unit tested. |
-| `scripts/lib/github.mjs` | Dependency-free GitHub REST/GraphQL client. |
-| `scripts/lib/openrouter.mjs` | Model discovery, diff chunking, JSON recovery. |
+| Path                            | What it is                                                             |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `review-rules.md`               | The rulebook. Human-written. Edit this.                                |
+| `rules.json`                    | Learned state: weight, status, and evidence per rule. Machine-written. |
+| `feedback-ledger.json`          | Every scored comment. The source of truth for weights.                 |
+| `findings.schema.json`          | Contract between the model and the posting script.                     |
+| `scripts/openrouter-review.mjs` | Produces findings via OpenRouter free models.                          |
+| `scripts/post-review.mjs`       | Gates findings and posts the review.                                   |
+| `scripts/tune-rules.mjs`        | The learning loop.                                                     |
+| `scripts/sync-rules.mjs`        | Keeps the markdown and the JSON in agreement.                          |
+| `scripts/lib/scoring.mjs`       | Pure scoring logic. All of it unit tested.                             |
+| `scripts/lib/github.mjs`        | Dependency-free GitHub REST/GraphQL client.                            |
+| `scripts/lib/openrouter.mjs`    | Model discovery, diff chunking, JSON recovery.                         |
 
 The scripts have no npm dependencies. They run on the Node 20 already present
 on `ubuntu-latest`, so there is no install step, no lockfile to maintain, and no
@@ -153,7 +153,7 @@ supply-chain surface on a workflow that runs against every PR.
 3. **Add the key** as a repository or organisation secret named
    `OPENROUTER_API_KEY` (Settings → Secrets and variables → Actions).
 
-4. **Optionally pin your preferred models** as a repository *variable* — not a
+4. **Optionally pin your preferred models** as a repository _variable_ — not a
    secret — named `OPENROUTER_MODELS`, comma-separated, best first:
 
    ```

@@ -43,7 +43,7 @@ how `$ne`/`$gt` operator injection gets in.
 **SEC-002 · blocker · Missing authentication or authorisation on a new route.**
 A new Express route, NestJS controller method, or Socket.IO event handler that
 does not sit behind the project's auth guard/middleware, or that authenticates
-the caller but never checks that the caller is allowed to touch *this* record.
+the caller but never checks that the caller is allowed to touch _this_ record.
 Broken object-level authorisation is the most common real vulnerability in this
 kind of codebase; flag it explicitly rather than assuming a guard exists further
 up.

@@ -49,7 +49,7 @@ const MAX_REQUESTS = Number(process.env.MAX_REQUESTS) || 4;
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS) || 4000;
 const PREFERRED = (process.env.OPENROUTER_MODELS || '')
   .split(',')
-  .map((s) => s.trim())
+  .map(s => s.trim())
   .filter(Boolean);
 
 /** Free tier allows 20 requests/minute. Stay comfortably under it. */
@@ -61,7 +61,7 @@ const REQUEST_SPACING_MS = 3500;
  */
 const MAX_CHUNK_CHARS = 40_000;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const SYSTEM_PROMPT = `You are a precise code reviewer. You review only the changed lines in a git diff.
 
@@ -72,8 +72,8 @@ You are strict about false positives. A short review with two real problems is f
 Never report: formatting or style that a linter handles, naming preferences, missing comments, speculative refactors, praise, or restatements of what the code does.`;
 
 function userPrompt({ digest, chunk, chunkIndex, chunkCount }) {
-  const files = chunk.map((f) => f.file).join('\n');
-  const diff = chunk.map((f) => f.patch).join('\n');
+  const files = chunk.map(f => f.file).join('\n');
+  const diff = chunk.map(f => f.patch).join('\n');
 
   return `Review this pull request diff against the rules below.
 
@@ -127,10 +127,14 @@ function sanitise(findings, chunkFiles, validRuleIds) {
   for (const f of Array.isArray(findings) ? findings : []) {
     if (!f || typeof f !== 'object') continue;
 
-    const ruleId = String(f.ruleId || '').toUpperCase().trim();
+    const ruleId = String(f.ruleId || '')
+      .toUpperCase()
+      .trim();
     const line = Number.parseInt(f.line, 10);
     const endLine = Number.parseInt(f.endLine, 10);
-    const severity = String(f.severity || '').toLowerCase().trim();
+    const severity = String(f.severity || '')
+      .toLowerCase()
+      .trim();
     const confidence = Number(f.confidence);
 
     if (!validRuleIds.has(ruleId)) {
@@ -167,7 +171,9 @@ function sanitise(findings, chunkFiles, validRuleIds) {
       confidence: Math.min(1, Math.max(0, confidence)),
       title: String(f.title).slice(0, 120),
       body: String(f.body).slice(0, 4000),
-      ...(f.suggestion ? { suggestion: String(f.suggestion).slice(0, 2000) } : {}),
+      ...(f.suggestion
+        ? { suggestion: String(f.suggestion).slice(0, 2000) }
+        : {}),
     });
   }
   return { findings: out, rejected };
@@ -183,30 +189,39 @@ async function main() {
 
   if (!API_KEY) {
     console.error('OPENROUTER_API_KEY is not set.');
-    writeFindings({ summary: 'Review skipped: no OpenRouter API key configured.', findings: [] });
+    writeFindings({
+      summary: 'Review skipped: no OpenRouter API key configured.',
+      findings: [],
+    });
     return;
   }
   if (!existsSync(DIFF_PATH)) {
     console.error(`${DIFF_PATH} is missing.`);
-    writeFindings({ summary: 'Review skipped: no diff was produced.', findings: [] });
+    writeFindings({
+      summary: 'Review skipped: no diff was produced.',
+      findings: [],
+    });
     return;
   }
 
   const diff = readFileSync(DIFF_PATH, 'utf8');
   if (!diff.trim()) {
-    writeFindings({ summary: 'No reviewable changes in this pull request.', findings: [] });
+    writeFindings({
+      summary: 'No reviewable changes in this pull request.',
+      findings: [],
+    });
     return;
   }
 
   const book = JSON.parse(readFileSync(RULES_PATH, 'utf8'));
   const explorationPercent = book.defaults?.explorationPercent ?? 10;
-  const { digest, included, exploring } = buildRulesDigest(book.rules, (ruleId) =>
-    isExplorationSlot(ruleId, PR_NUMBER, explorationPercent),
+  const { digest, included, exploring } = buildRulesDigest(book.rules, ruleId =>
+    isExplorationSlot(ruleId, PR_NUMBER, explorationPercent)
   );
   const validRuleIds = new Set(included);
   console.log(
     `Rulebook v${book.version}: ${included.length} rule(s) in play` +
-      (exploring.length ? `, re-testing muted ${exploring.join(', ')}` : ''),
+      (exploring.length ? `, re-testing muted ${exploring.join(', ')}` : '')
   );
 
   // --- pick models --------------------------------------------------------
@@ -215,39 +230,58 @@ async function main() {
     available = await listFreeModels(API_KEY);
   } catch (err) {
     console.error(`Could not list models: ${err.message}`);
-    writeFindings({ summary: `Review skipped: OpenRouter unreachable (${err.message}).`, findings: [] });
+    writeFindings({
+      summary: `Review skipped: OpenRouter unreachable (${err.message}).`,
+      findings: [],
+    });
     return;
   }
   if (available.length === 0) {
-    writeFindings({ summary: 'Review skipped: no free models are currently available.', findings: [] });
+    writeFindings({
+      summary: 'Review skipped: no free models are currently available.',
+      findings: [],
+    });
     return;
   }
 
   const chain = chooseModels(available, PREFERRED, MAX_FALLBACK_MODELS);
-  const minContext = Math.min(...chain.map((m) => m.context));
-  const jsonMode = chain.every((m) => m.structured);
-  console.log(`Model chain: ${chain.map((m) => m.id).join(' -> ')}`);
-  console.log(`Smallest context in chain: ${minContext} tokens. JSON mode: ${jsonMode}.`);
+  const minContext = Math.min(...chain.map(m => m.context));
+  const jsonMode = chain.every(m => m.structured);
+  console.log(`Model chain: ${chain.map(m => m.id).join(' -> ')}`);
+  console.log(
+    `Smallest context in chain: ${minContext} tokens. JSON mode: ${jsonMode}.`
+  );
 
   const status = await keyStatus(API_KEY);
   if (status) {
     console.log(
       `Key usage: ${status.usage ?? '?'} / limit ${status.limit ?? 'none'}` +
-        (status.rate_limit ? ` (${status.rate_limit.requests}/${status.rate_limit.interval})` : ''),
+        (status.rate_limit
+          ? ` (${status.rate_limit.requests}/${status.rate_limit.interval})`
+          : '')
     );
   }
 
   // --- chunk the diff -----------------------------------------------------
   const overheadTokens = estimateTokens(SYSTEM_PROMPT + digest) + 800;
-  const budgetTokens = Math.max(2000, minContext - MAX_OUTPUT_TOKENS - overheadTokens);
-  const budgetChars = Math.min(MAX_CHUNK_CHARS, Math.floor(budgetTokens * CHARS_PER_TOKEN));
+  const budgetTokens = Math.max(
+    2000,
+    minContext - MAX_OUTPUT_TOKENS - overheadTokens
+  );
+  const budgetChars = Math.min(
+    MAX_CHUNK_CHARS,
+    Math.floor(budgetTokens * CHARS_PER_TOKEN)
+  );
 
   const files = splitDiffByFile(diff);
-  const { chunks, skipped, truncated } = packChunks(files, { budgetChars, maxChunks: MAX_REQUESTS });
+  const { chunks, skipped, truncated } = packChunks(files, {
+    budgetChars,
+    maxChunks: MAX_REQUESTS,
+  });
   console.log(
     `${files.length} file(s) -> ${chunks.length} request(s) at ${budgetChars} chars each.` +
       (truncated.length ? ` Truncated: ${truncated.join(', ')}.` : '') +
-      (skipped.length ? ` Skipped (request cap): ${skipped.join(', ')}.` : ''),
+      (skipped.length ? ` Skipped (request cap): ${skipped.join(', ')}.` : '')
   );
 
   // --- review -------------------------------------------------------------
@@ -259,16 +293,21 @@ async function main() {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    const chunkFiles = chunk.map((f) => f.file);
+    const chunkFiles = chunk.map(f => f.file);
     if (i > 0) await sleep(REQUEST_SPACING_MS);
 
     let result;
     try {
       result = await complete({
         apiKey: API_KEY,
-        models: chain.map((m) => m.id),
+        models: chain.map(m => m.id),
         system: SYSTEM_PROMPT,
-        user: userPrompt({ digest, chunk, chunkIndex: i, chunkCount: chunks.length }),
+        user: userPrompt({
+          digest,
+          chunk,
+          chunkIndex: i,
+          chunkCount: chunks.length,
+        }),
         maxTokens: MAX_OUTPUT_TOKENS,
         jsonMode,
         title: `PR Review #${PR_NUMBER}`,
@@ -284,12 +323,14 @@ async function main() {
 
     // Free models sometimes narrate before the JSON. One cheap repair attempt.
     if (!parsed) {
-      console.log(`Batch ${i + 1}: unparseable reply from ${result.model}, retrying once.`);
+      console.log(
+        `Batch ${i + 1}: unparseable reply from ${result.model}, retrying once.`
+      );
       await sleep(REQUEST_SPACING_MS);
       try {
         const repair = await complete({
           apiKey: API_KEY,
-          models: chain.map((m) => m.id),
+          models: chain.map(m => m.id),
           system: SYSTEM_PROMPT,
           user:
             'Your previous reply was not valid JSON. Return the same content as a single JSON ' +
@@ -306,12 +347,21 @@ async function main() {
     }
 
     if (!parsed) {
-      debug.push({ batch: i + 1, files: chunkFiles, model: result.model, unparseable: result.text.slice(0, 1200) });
+      debug.push({
+        batch: i + 1,
+        files: chunkFiles,
+        model: result.model,
+        unparseable: result.text.slice(0, 1200),
+      });
       failures++;
       continue;
     }
 
-    const { findings, rejected } = sanitise(parsed.findings, chunkFiles, validRuleIds);
+    const { findings, rejected } = sanitise(
+      parsed.findings,
+      chunkFiles,
+      validRuleIds
+    );
     for (const f of findings) {
       const key = `${f.ruleId}|${f.file}|${f.line}`;
       if (seen.has(key)) continue;
@@ -322,7 +372,7 @@ async function main() {
 
     console.log(
       `Batch ${i + 1}/${chunks.length} via ${result.model}: ` +
-        `${findings.length} finding(s) kept, ${rejected.length} rejected.`,
+        `${findings.length} finding(s) kept, ${rejected.length} rejected.`
     );
     debug.push({
       batch: i + 1,
@@ -336,18 +386,23 @@ async function main() {
 
   // --- assemble -----------------------------------------------------------
   const notes = [];
-  if (truncated.length) notes.push(`Large diffs truncated in: ${truncated.join(', ')}.`);
+  if (truncated.length)
+    notes.push(`Large diffs truncated in: ${truncated.join(', ')}.`);
   if (skipped.length) {
-    notes.push(`Not reviewed — hit the ${MAX_REQUESTS}-request budget: ${skipped.join(', ')}.`);
+    notes.push(
+      `Not reviewed — hit the ${MAX_REQUESTS}-request budget: ${skipped.join(', ')}.`
+    );
   }
   if (failures === chunks.length) {
     notes.push(
       `**Nothing was reviewed.** All ${chunks.length} batch(es) failed, so an absence of ` +
         `findings below means the diff was never read — not that it is clean. ` +
-        `See the workflow log for the provider error.`,
+        `See the workflow log for the provider error.`
     );
   } else if (failures) {
-    notes.push(`${failures} of ${chunks.length} batch(es) failed and were skipped.`);
+    notes.push(
+      `${failures} of ${chunks.length} batch(es) failed and were skipped.`
+    );
   }
 
   const summary =
@@ -355,11 +410,14 @@ async function main() {
     'No reviewable findings were produced.';
 
   writeFindings({ summary, findings: all });
-  writeFileSync(DEBUG_PATH, JSON.stringify({ chain: chain.map((m) => m.id), debug }, null, 2));
+  writeFileSync(
+    DEBUG_PATH,
+    JSON.stringify({ chain: chain.map(m => m.id), debug }, null, 2)
+  );
   console.log(`Wrote ${all.length} finding(s) to ${FINDINGS_PATH}.`);
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error(`openrouter-review failed: ${err.stack || err.message}`);
   try {
     writeFindings({ summary: `Review failed: ${err.message}`, findings: [] });
