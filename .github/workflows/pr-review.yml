@@ -1,0 +1,97 @@
+name: PR Review
+
+# Automated PR review using OpenRouter free models.
+#
+# Same three-step shape as before — prepare the diff, generate findings, post
+# them — but the middle step is now a plain script calling OpenRouter instead of
+# an agentic action. post-review.mjs, the rule gating and the feedback loop are
+# untouched: only the thing producing findings.json changed.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Prepare diff
+        id: prep
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-review
+
+          MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+
+          git diff --unified=3 "$MERGE_BASE" "$HEAD_SHA" \
+            -- . ':(exclude)**/*.lock' ':(exclude)**/package-lock.json' \
+               ':(exclude)**/yarn.lock' ':(exclude)**/pnpm-lock.yaml' \
+               ':(exclude)**/*.snap' ':(exclude)**/dist/**' \
+               ':(exclude)**/build/**' ':(exclude)**/*.min.js' \
+            > .claude-review/pr.diff
+
+          git diff --name-status "$MERGE_BASE" "$HEAD_SHA" > .claude-review/changed-files.txt
+
+          BYTES=$(wc -c < .claude-review/pr.diff)
+          echo "diff_bytes=$BYTES" >> "$GITHUB_OUTPUT"
+          echo "Diff: ${BYTES} bytes, $(wc -l < .claude-review/changed-files.txt) file(s)."
+
+      - name: Generate findings
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional. Preferred models, best first — any that are no longer free
+          # are skipped and the script falls back to whatever currently is.
+          # Leave unset to just use the largest-context free models available.
+          OPENROUTER_MODELS: ${{ vars.OPENROUTER_MODELS }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Passed as env, not interpolated into a shell command — a PR title is
+          # attacker-controlled text and must never reach a `run:` block inline.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          # Each batch is one OpenRouter request. The free tier allows 50 per
+          # day, or 1000 once the account has bought $10 of credit. Four keeps a
+          # busy repo inside the smaller budget.
+          MAX_REQUESTS: '4'
+        run: node .github/review/scripts/openrouter-review.mjs
+
+      - name: Post review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REQUEST_CHANGES_ON_BLOCKER: '0'
+        run: node .github/review/scripts/post-review.mjs
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-${{ github.event.pull_request.number }}
+          path: .claude-review/
+          retention-days: 14
+          if-no-files-found: warn

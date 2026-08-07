@@ -75,6 +75,26 @@ This project uses **Husky** to enforce code quality standards before each commit
 
 **Note:** All checks must pass before a commit is allowed. If any check fails, the commit will be blocked until issues are resolved.
 
+## 🤖 Automated PR Review
+
+Every non-draft pull request is reviewed against a written rulebook at [.github/review/review-rules.md](.github/review/review-rules.md) — 56 rules covering security, PHI handling, data access, async correctness, realtime, frontend, TypeScript, tests, and ops.
+
+**How it runs** ([.github/workflows/pr-review.yml](.github/workflows/pr-review.yml)):
+
+1. **Prepare** — computes the diff against the merge base, excluding lockfiles, snapshots, and build output
+2. **Review** — sends the diff and a rules digest to a free OpenRouter model, producing structured findings
+3. **Post** — validates the findings, gates them against learned per-rule weights, and posts one review
+
+**The feedback loop:** each comment carries a hidden marker tying it to a rule ID. A weekly job ([.github/workflows/claude-review-tuning.yml](.github/workflows/claude-review-tuning.yml)) reads how humans responded — 👍/👎 reactions, reply wording, whether the flagged code changed — and retunes each rule's weight. Rules the team keeps dismissing go to probation, then mute. Muted rules are re-tested on ~10% of PRs so a rule that was genuinely fixed earns its way back.
+
+**React to the comments.** 👍 and 👎 are the only unambiguous signal the loop gets.
+
+**Required setup:** an `OPENROUTER_API_KEY` repository secret. Turn training **off** for free models in OpenRouter's privacy settings before enabling — diffs of clinical code can carry table names, field names, and fixture data.
+
+**Opting out:** add the `skip-review` label to a PR. The review never blocks a merge; it posts as a comment.
+
+Adding or removing a rule means editing `review-rules.md` and running `node .github/review/scripts/sync-rules.mjs --write`. CI fails any PR where the rulebook and `rules.json` disagree. Full design notes: [.github/review/README.md](.github/review/README.md).
+
 ## 🌐 Access
 
 - **Development**: http://localhost:3000 (optimized port)
