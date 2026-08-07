@@ -22,6 +22,7 @@ import {
   chooseModels,
   extractJson,
   packChunks,
+  rankModels,
   splitDiffByFile,
 } from '../lib/openrouter.mjs';
 
@@ -202,6 +203,35 @@ test('with no preference the largest context comes first', () => {
 
 test('the chain never exceeds the requested length', () => {
   assert.equal(chooseModels(AVAILABLE, [], 2).length, 2);
+});
+
+test('a model that guarantees JSON outranks a bigger one that does not', () => {
+  // The regression this locks in: ranking on context alone put a 262k model
+  // with no structured-output support ahead of a 128k model that had it, and
+  // the big one returned prose the parser could not read.
+  const ranked = rankModels(AVAILABLE);
+  assert.equal(ranked[0].id, 'mid/model:free');
+  assert.ok(
+    ranked.every((m, i) => i === 0 || !m.structured || ranked[i - 1].structured),
+    'every structured model sorts ahead of every unstructured one',
+  );
+});
+
+test('among equally capable models the larger context still wins', () => {
+  const ranked = rankModels([
+    { id: 'small/structured:free', context: 8000, structured: true },
+    { id: 'large/structured:free', context: 262144, structured: true },
+  ]);
+  assert.equal(ranked[0].id, 'large/structured:free');
+});
+
+test('ranking does not mutate the caller array', () => {
+  const input = [...AVAILABLE];
+  rankModels(input);
+  assert.deepEqual(
+    input.map((m) => m.id),
+    AVAILABLE.map((m) => m.id),
+  );
 });
 
 // --- end to end ------------------------------------------------------------

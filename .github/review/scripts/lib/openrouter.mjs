@@ -186,7 +186,23 @@ export function buildRulesDigest(rules, isExploring = () => false) {
 }
 
 /**
- * Fetch the models that are currently free, largest context first.
+ * Rank candidate models best-first: structured-output support, then context.
+ *
+ * The whole pipeline depends on the reply parsing as strict JSON, and most free
+ * models cannot guarantee that. Ranking on context alone puts a large-context
+ * model that rambles ahead of a smaller one that answers in the required shape,
+ * and the rambling one then wins the chain and returns nothing usable.
+ *
+ * @param {Array<{id:string, context:number, structured:boolean}>} models
+ */
+export function rankModels(models) {
+  return [...models].sort(
+    (a, b) => Number(b.structured) - Number(a.structured) || b.context - a.context,
+  );
+}
+
+/**
+ * Fetch the models that are currently free, best first.
  * @param {string} apiKey
  * @returns {Promise<Array<{id:string, context:number, structured:boolean}>>}
  */
@@ -197,14 +213,15 @@ export async function listFreeModels(apiKey) {
   if (!res.ok) throw new Error(`GET /models -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const { data } = await res.json();
 
-  return (data || [])
-    .filter((m) => typeof m.id === 'string' && m.id.endsWith(':free'))
-    .map((m) => ({
-      id: m.id,
-      context: Number(m.context_length) || 0,
-      structured: (m.supported_parameters || []).includes('structured_outputs'),
-    }))
-    .sort((a, b) => b.context - a.context);
+  return rankModels(
+    (data || [])
+      .filter((m) => typeof m.id === 'string' && m.id.endsWith(':free'))
+      .map((m) => ({
+        id: m.id,
+        context: Number(m.context_length) || 0,
+        structured: (m.supported_parameters || []).includes('structured_outputs'),
+      })),
+  );
 }
 
 /**

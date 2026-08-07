@@ -3,9 +3,30 @@
 An automated pull request reviewer that applies a written rulebook and gets
 quieter over time about the rules people keep dismissing.
 
+## When it runs
+
+- A PR **into `main` or `dev`** is opened, reopened, or marked ready for review.
+  PRs targeting anything else are not reviewed.
+- Someone adds the **`review-again`** label to such a PR. The label is removed
+  again afterwards so it can be reapplied.
+- Someone with write access comments **`/review`** on it.
+
+Deliberately **not** on `synchronize`. Pushing follow-up commits to an open PR
+does not re-review it, which keeps the free tier from being spent on
+work-in-progress. The cost is real and worth stating plainly: a review goes
+stale the moment the author pushes a fix, so a PR can carry a clean review of
+code that no longer exists. Re-request it with the label or the comment when the
+diff has moved enough to matter.
+
+Two caveats on the comment trigger. GitHub runs `issue_comment` workflows from
+the **default branch**, so `/review` only works once this workflow is merged to
+`main` — the label and the open/reopen triggers work from a PR branch straight
+away. And `/review` is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because
+without that gate any drive-by commenter could spend the day's request budget.
+
 ## How it works
 
-Every pull request runs three steps:
+Once triggered, a review is three steps:
 
 1. **Prepare** — the workflow computes the diff against the merge base and
    writes it to `.claude-review/pr.diff`.
