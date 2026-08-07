@@ -22,7 +22,15 @@
   "$defs": {
     "finding": {
       "type": "object",
-      "required": ["ruleId", "file", "line", "severity", "confidence", "title", "body"],
+      "required": [
+        "ruleId",
+        "file",
+        "line",
+        "severity",
+        "confidence",
+        "title",
+        "body"
+      ],
       "additionalProperties": false,
       "properties": {
         "ruleId": {

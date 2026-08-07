@@ -38,15 +38,20 @@ const REPORT_PATH = process.env.REPORT_PATH || 'tuning-report.md';
 
 const REPO = process.env.REPO;
 const NOW = process.env.RUN_TIMESTAMP || new Date().toISOString();
-const MARKER = 'claude-review';
+const MARKER = 'ih-tek-review';
 const MAX_LEDGER_ENTRIES = 5000;
 
 const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes('--dry-run');
-const DAYS = Number(argv[argv.indexOf('--days') + 1]) || Number(process.env.LOOKBACK_DAYS) || 30;
+const DAYS =
+  Number(argv[argv.indexOf('--days') + 1]) ||
+  Number(process.env.LOOKBACK_DAYS) ||
+  30;
 
-const DISMISSAL = /\b(false positive|not an issue|not a problem|wontfix|won't fix|by design|intentional|disagree|incorrect|irrelevant|out of scope|already handled|no it('?s| is) not)\b/i;
-const AGREEMENT = /\b(good catch|nice catch|great catch|fixed|done|will fix|fixing|addressed|thanks|thank you|agreed|you'?re right|makes sense)\b/i;
+const DISMISSAL =
+  /\b(false positive|not an issue|not a problem|wontfix|won't fix|by design|intentional|disagree|incorrect|irrelevant|out of scope|already handled|no it('?s| is) not)\b/i;
+const AGREEMENT =
+  /\b(good catch|nice catch|great catch|fixed|done|will fix|fixing|addressed|thanks|thank you|agreed|you'?re right|makes sense)\b/i;
 
 function log(...a) {
   console.log(...a);
@@ -105,9 +110,16 @@ async function fetchThreadState(repo, prNumber) {
   for (let page = 0; page < 10; page++) {
     let data;
     try {
-      data = await graphql(query, { owner, name, number: Number(prNumber), cursor });
+      data = await graphql(query, {
+        owner,
+        name,
+        number: Number(prNumber),
+        cursor,
+      });
     } catch (err) {
-      log(`  GraphQL thread lookup failed (${err.message.slice(0, 120)}); falling back to REST signals only.`);
+      log(
+        `  GraphQL thread lookup failed (${err.message.slice(0, 120)}); falling back to REST signals only.`
+      );
       return byComment;
     }
     const threads = data?.repository?.pullRequest?.reviewThreads;
@@ -117,11 +129,13 @@ async function fetchThreadState(repo, prNumber) {
       const nodes = t.comments?.nodes || [];
       const root = nodes[0];
       if (!root?.databaseId) continue;
-      const replies = nodes.slice(1).filter((c) => !/\[bot\]$/.test(c.author?.login || ''));
+      const replies = nodes
+        .slice(1)
+        .filter(c => !/\[bot\]$/.test(c.author?.login || ''));
       byComment.set(root.databaseId, {
         isResolved: t.isResolved,
         isOutdated: t.isOutdated,
-        replies: replies.map((r) => r.body || ''),
+        replies: replies.map(r => r.body || ''),
       });
     }
 
@@ -136,13 +150,16 @@ async function fetchThreadState(repo, prNumber) {
  * @returns {{outcome:'accepted'|'rejected'|'ignored'|'undecided', signal:string}}
  */
 function scoreComment({ reactions, thread, prClosed, isOutdated }) {
-  const has = (c) => reactions.some((r) => r.content === c);
+  const has = c => reactions.some(r => r.content === c);
   if (has('-1')) return { outcome: 'rejected', signal: 'thumbs-down' };
-  if (has('+1') || has('hooray') || has('rocket')) return { outcome: 'accepted', signal: 'thumbs-up' };
+  if (has('+1') || has('hooray') || has('rocket'))
+    return { outcome: 'accepted', signal: 'thumbs-up' };
 
   for (const reply of thread?.replies || []) {
-    if (DISMISSAL.test(reply)) return { outcome: 'rejected', signal: 'reply-dismissal' };
-    if (AGREEMENT.test(reply)) return { outcome: 'accepted', signal: 'reply-agreement' };
+    if (DISMISSAL.test(reply))
+      return { outcome: 'rejected', signal: 'reply-dismissal' };
+    if (AGREEMENT.test(reply))
+      return { outcome: 'accepted', signal: 'reply-agreement' };
   }
 
   if (isOutdated || thread?.isOutdated) {
@@ -158,18 +175,24 @@ async function harvest(ledger) {
   log(`Scanning pull requests in ${REPO} updated since ${since}...`);
 
   const prs = (
-    await restAll(`/repos/${REPO}/pulls?state=all&sort=updated&direction=desc`, { max: 300 })
-  ).filter((pr) => pr.updated_at >= since);
+    await restAll(
+      `/repos/${REPO}/pulls?state=all&sort=updated&direction=desc`,
+      { max: 300 }
+    )
+  ).filter(pr => pr.updated_at >= since);
   log(`${prs.length} pull request(s) in window.`);
 
   let scanned = 0;
   let scored = 0;
 
   for (const pr of prs) {
-    const comments = await restAll(`/repos/${REPO}/pulls/${pr.number}/comments`, { max: 200 });
+    const comments = await restAll(
+      `/repos/${REPO}/pulls/${pr.number}/comments`,
+      { max: 200 }
+    );
     const ours = comments
-      .map((c) => ({ comment: c, marker: parseMarker(c.body) }))
-      .filter((x) => x.marker);
+      .map(c => ({ comment: c, marker: parseMarker(c.body) }))
+      .filter(x => x.marker);
     if (ours.length === 0) continue;
 
     scanned += ours.length;
@@ -220,7 +243,10 @@ function pruneLedger(ledger) {
   const ids = Object.keys(ledger.entries);
   if (ids.length <= MAX_LEDGER_ENTRIES) return ledger;
   const keep = ids
-    .sort((a, b) => Date.parse(ledger.entries[b].at) - Date.parse(ledger.entries[a].at))
+    .sort(
+      (a, b) =>
+        Date.parse(ledger.entries[b].at) - Date.parse(ledger.entries[a].at)
+    )
     .slice(0, MAX_LEDGER_ENTRIES);
   const entries = {};
   for (const id of keep) entries[id] = ledger.entries[id];
@@ -229,7 +255,10 @@ function pruneLedger(ledger) {
 
 function writeReport(book, next, changes, ledger) {
   const outcomes = Object.values(ledger.entries);
-  const tally = outcomes.reduce((acc, o) => ((acc[o.outcome] = (acc[o.outcome] || 0) + 1), acc), {});
+  const tally = outcomes.reduce(
+    (acc, o) => ((acc[o.outcome] = (acc[o.outcome] || 0) + 1), acc),
+    {}
+  );
 
   const lines = [
     '## Review agent tuning report',
@@ -244,44 +273,59 @@ function writeReport(book, next, changes, ledger) {
   if (changes.length === 0) {
     lines.push('No rule weights changed this run.');
   } else {
-    lines.push('### Rules that moved', '', '| Rule | Weight | State | Evidence |', '| --- | --- | --- | --- |');
+    lines.push(
+      '### Rules that moved',
+      '',
+      '| Rule | Weight | State | Evidence |',
+      '| --- | --- | --- | --- |'
+    );
     for (const c of changes.sort((a, b) => a.weight[1] - b.weight[1])) {
       const arrow = c.weight[1] < c.weight[0] ? '↓' : '↑';
-      const state = c.state[0] === c.state[1] ? c.state[1] : `**${c.state[0]} → ${c.state[1]}**`;
+      const state =
+        c.state[0] === c.state[1]
+          ? c.state[1]
+          : `**${c.state[0]} → ${c.state[1]}**`;
       lines.push(
         `| \`${c.ruleId}\` ${c.title} | ${c.weight[0]} ${arrow} ${c.weight[1]} | ${state} | ` +
-          `${c.stats.accepted}✓ / ${c.stats.rejected}✗ / ${c.stats.ignored}∅ |`,
+          `${c.stats.accepted}✓ / ${c.stats.rejected}✗ / ${c.stats.ignored}∅ |`
       );
     }
   }
 
   const muted = Object.entries(next).filter(([, r]) => r.state === 'muted');
-  const probation = Object.entries(next).filter(([, r]) => r.state === 'probation');
+  const probation = Object.entries(next).filter(
+    ([, r]) => r.state === 'probation'
+  );
 
   if (muted.length) {
     lines.push('', '### Currently muted', '');
     for (const [id, r] of muted) {
-      lines.push(`- \`${id}\` ${r.title} — weight ${r.weight} over ${evidenceCount(r.stats).toFixed(1)} observations`);
+      lines.push(
+        `- \`${id}\` ${r.title} — weight ${r.weight} over ${evidenceCount(r.stats).toFixed(1)} observations`
+      );
     }
     lines.push(
       '',
       `Muted rules are still re-tested on roughly ${book.defaults?.explorationPercent ?? 10}% of pull requests, ` +
-        'so a rule that was fixed can earn its way back without anyone intervening.',
+        'so a rule that was fixed can earn its way back without anyone intervening.'
     );
   }
   if (probation.length) {
     lines.push('', '### On probation (blocker/major findings only)', '');
-    for (const [id, r] of probation) lines.push(`- \`${id}\` ${r.title} — weight ${r.weight}`);
+    for (const [id, r] of probation)
+      lines.push(`- \`${id}\` ${r.title} — weight ${r.weight}`);
   }
 
-  const gen = outcomes.filter((o) => o.ruleId === 'GEN-000' && o.outcome === 'accepted').length;
+  const gen = outcomes.filter(
+    o => o.ruleId === 'GEN-000' && o.outcome === 'accepted'
+  ).length;
   if (gen > 0) {
     lines.push(
       '',
       `### Worth a look`,
       '',
       `${gen} accepted \`GEN-000\` finding(s) in the ledger — real problems no rule covers yet. ` +
-        'Read them and consider promoting the recurring ones into `review-rules.md`.',
+        'Read them and consider promoting the recurring ones into `review-rules.md`.'
     );
   }
 
@@ -291,7 +335,7 @@ function writeReport(book, next, changes, ledger) {
     '',
     'Weights are the mean of a Beta posterior per rule, seeded at 0.7 and updated from human ' +
       'reactions, thread replies, and whether the flagged code actually changed. Observations ' +
-      'decay with a 90-day half-life so the rulebook reflects how each rule behaves now.',
+      'decay with a 90-day half-life so the rulebook reflects how each rule behaves now.'
   );
 
   const report = lines.join('\n');
@@ -307,7 +351,7 @@ async function main() {
 
   ledger = pruneLedger(await harvest(ledger));
 
-  const outcomes = Object.values(ledger.entries).map((e) => ({
+  const outcomes = Object.values(ledger.entries).map(e => ({
     ruleId: e.ruleId,
     outcome: e.outcome,
     at: e.at,
@@ -330,28 +374,45 @@ async function main() {
     ledger.lastRunAt = NOW;
     writeFileSync(LEDGER_PATH, JSON.stringify(ledger, null, 2) + '\n');
     if (process.env.GITHUB_OUTPUT) {
-      writeFileSync(process.env.GITHUB_OUTPUT, 'changed=false\n', { flag: 'a' });
+      writeFileSync(process.env.GITHUB_OUTPUT, 'changed=false\n', {
+        flag: 'a',
+      });
     }
     return;
   }
 
   writeFileSync(
     RULES_PATH,
-    JSON.stringify({ ...book, version: (book.version || 0) + 1, updatedAt: NOW, rules: nextRules }, null, 2) + '\n',
+    JSON.stringify(
+      {
+        ...book,
+        version: (book.version || 0) + 1,
+        updatedAt: NOW,
+        rules: nextRules,
+      },
+      null,
+      2
+    ) + '\n'
   );
   ledger.lastRunAt = NOW;
   writeFileSync(LEDGER_PATH, JSON.stringify(ledger, null, 2) + '\n');
 
-  log(`Updated ${changes.length} rule(s); rulebook is now v${(book.version || 0) + 1}.`);
+  log(
+    `Updated ${changes.length} rule(s); rulebook is now v${(book.version || 0) + 1}.`
+  );
   if (process.env.GITHUB_OUTPUT) {
-    writeFileSync(process.env.GITHUB_OUTPUT, `changed=true\nchange_count=${changes.length}\n`, { flag: 'a' });
+    writeFileSync(
+      process.env.GITHUB_OUTPUT,
+      `changed=true\nchange_count=${changes.length}\n`,
+      { flag: 'a' }
+    );
   }
 }
 
 // Only run when invoked directly, so the scoring helpers above stay importable
 // from the test file.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((err) => {
+  main().catch(err => {
     console.error(`tune-rules failed: ${err.stack || err.message}`);
     process.exit(1);
   });

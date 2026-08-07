@@ -32,13 +32,14 @@ import { gateFindings, SEVERITY_ORDER } from './lib/scoring.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = join(HERE, '..', 'rules.json');
 const FINDINGS_PATH = '.claude-review/findings.json';
-const MARKER = 'claude-review';
+const MARKER = 'ih-tek-review';
 
 const REPO = process.env.REPO;
 const PR_NUMBER = process.env.PR_NUMBER;
 const HEAD_SHA = process.env.HEAD_SHA;
 const DIFF_TRUNCATED = process.env.DIFF_TRUNCATED === 'true';
-const REQUEST_CHANGES_ON_BLOCKER = process.env.REQUEST_CHANGES_ON_BLOCKER === '1';
+const REQUEST_CHANGES_ON_BLOCKER =
+  process.env.REQUEST_CHANGES_ON_BLOCKER === '1';
 
 const SEVERITY_LABEL = {
   blocker: '🔴 Blocker',
@@ -49,41 +50,57 @@ const SEVERITY_LABEL = {
 
 /** Validate a single finding. Returns an error string, or null if it is fine. */
 function validateFinding(f, i) {
-  if (typeof f !== 'object' || f === null) return `finding[${i}] is not an object`;
-  if (!/^[A-Z]+-\d+$/.test(f.ruleId || '')) return `finding[${i}] has a bad ruleId`;
+  if (typeof f !== 'object' || f === null)
+    return `finding[${i}] is not an object`;
+  if (!/^[A-Z]+-\d+$/.test(f.ruleId || ''))
+    return `finding[${i}] has a bad ruleId`;
   if (typeof f.file !== 'string' || !f.file) return `finding[${i}] has no file`;
-  if (!Number.isInteger(f.line) || f.line < 1) return `finding[${i}] has a bad line`;
-  if (!(f.severity in SEVERITY_ORDER)) return `finding[${i}] has a bad severity`;
+  if (!Number.isInteger(f.line) || f.line < 1)
+    return `finding[${i}] has a bad line`;
+  if (!(f.severity in SEVERITY_ORDER))
+    return `finding[${i}] has a bad severity`;
   if (typeof f.confidence !== 'number' || f.confidence < 0 || f.confidence > 1)
     return `finding[${i}] has a bad confidence`;
-  if (typeof f.title !== 'string' || !f.title) return `finding[${i}] has no title`;
+  if (typeof f.title !== 'string' || !f.title)
+    return `finding[${i}] has no title`;
   if (typeof f.body !== 'string' || !f.body) return `finding[${i}] has no body`;
   return null;
 }
 
 function commentBody(f, rule) {
-  const parts = [`**${SEVERITY_LABEL[f.severity]} · ${f.ruleId}** — ${f.title}`, '', f.body];
+  const parts = [
+    `**${SEVERITY_LABEL[f.severity]} · ${f.ruleId}** — ${f.title}`,
+    '',
+    f.body,
+  ];
 
   if (f.suggestion) {
-    parts.push('', '```suggestion', f.suggestion.replace(/^```\w*\n?|```$/g, ''), '```');
+    parts.push(
+      '',
+      '```suggestion',
+      f.suggestion.replace(/^```\w*\n?|```$/g, ''),
+      '```'
+    );
   }
 
   const notes = [];
   if (f._exploring) {
     notes.push(
       'This rule is currently muted because past comments from it were dismissed. ' +
-        'It is being re-tested on this PR — your reaction decides whether it comes back.',
+        'It is being re-tested on this PR — your reaction decides whether it comes back.'
     );
   }
   if (rule.state === 'probation') {
-    notes.push('This rule is on probation; feedback on it is weighted heavily.');
+    notes.push(
+      'This rule is on probation; feedback on it is weighted heavily.'
+    );
   }
   if (notes.length) parts.push('', `> ${notes.join(' ')}`);
 
   parts.push(
     '',
     '<sub>👍 if this was useful, 👎 if it was not — the reviewer tunes itself from these reactions.</sub>',
-    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} conf=${f.confidence} score=${f._score} sev=${f.severity}${f._exploring ? ' explore=1' : ''} -->`,
+    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} conf=${f.confidence} score=${f._score} sev=${f.severity}${f._exploring ? ' explore=1' : ''} -->`
   );
   return parts.join('\n');
 }
@@ -92,14 +109,16 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
   const counts = { blocker: 0, major: 0, minor: 0, nit: 0 };
   for (const f of kept) counts[f.severity]++;
 
-  const lines = ['## Claude review', ''];
+  const lines = ['## IH Tek review', ''];
   lines.push(summary || '_No summary was produced._', '');
 
   if (kept.length === 0) {
     // A clean verdict is only honest when something was actually read. The
     // generator says so in the summary when it reviewed nothing at all.
     if (!/nothing was reviewed/i.test(summary || '')) {
-      lines.push('No findings above the confidence threshold. Nothing to flag.');
+      lines.push(
+        'No findings above the confidence threshold. Nothing to flag.'
+      );
     }
   } else {
     lines.push(
@@ -107,7 +126,7 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
         Object.entries(counts)
           .filter(([, n]) => n > 0)
           .map(([sev, n]) => `${SEVERITY_LABEL[sev]} ${n}`)
-          .join(' · '),
+          .join(' · ')
     );
   }
 
@@ -117,39 +136,51 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
       '### Findings outside the diff',
       '',
       'These could not be attached to a line this PR changed:',
-      '',
+      ''
     );
     for (const f of outOfDiff) {
       lines.push(`- **${f.ruleId}** \`${f.file}:${f.line}\` — ${f.title}`);
     }
   }
 
-  const noise = dropped.filter((d) => !/already posted/.test(d.reason));
+  const noise = dropped.filter(d => !/already posted/.test(d.reason));
   if (noise.length) {
     lines.push(
       '',
-      '<details><summary>' + noise.length + ' finding(s) suppressed by the feedback loop</summary>',
-      '',
+      '<details><summary>' +
+        noise.length +
+        ' finding(s) suppressed by the feedback loop</summary>',
+      ''
     );
     for (const d of noise) {
-      lines.push(`- \`${d.finding.ruleId}\` ${d.finding.file}:${d.finding.line} — ${d.reason}`);
+      lines.push(
+        `- \`${d.finding.ruleId}\` ${d.finding.file}:${d.finding.line} — ${d.reason}`
+      );
     }
     lines.push('', '</details>');
   }
 
   if (invalid.length) {
-    lines.push('', `<sub>${invalid.length} malformed finding(s) discarded: ${invalid.join('; ')}</sub>`);
+    lines.push(
+      '',
+      `<sub>${invalid.length} malformed finding(s) discarded: ${invalid.join('; ')}</sub>`
+    );
   }
   if (DIFF_TRUNCATED) {
-    lines.push('', '<sub>⚠️ The diff was truncated for size — later files were not reviewed.</sub>');
+    lines.push(
+      '',
+      '<sub>⚠️ The diff was truncated for size — later files were not reviewed.</sub>'
+    );
   }
 
-  const muted = Object.entries(rules).filter(([, r]) => r.state === 'muted').length;
+  const muted = Object.entries(rules).filter(
+    ([, r]) => r.state === 'muted'
+  ).length;
   lines.push(
     '',
     `<sub>Rulebook v${rules._version ?? '?'} · ${Object.keys(rules).length - 1} rules · ${muted} muted. ` +
       'See `.github/review/review-rules.md`. React 👍/👎 on any comment to tune the reviewer.</sub>',
-    `<!-- ${MARKER} summary -->`,
+    `<!-- ${MARKER} summary -->`
   );
   return lines.join('\n');
 }
@@ -161,7 +192,9 @@ async function main() {
   }
 
   if (!existsSync(FINDINGS_PATH)) {
-    console.log('No findings.json was produced — the review step likely failed. Nothing to post.');
+    console.log(
+      'No findings.json was produced — the review step likely failed. Nothing to post.'
+    );
     return;
   }
 
@@ -185,13 +218,17 @@ async function main() {
     if (err) invalid.push(err);
     else valid.push(f);
   });
-  console.log(`Parsed ${valid.length} valid finding(s), ${invalid.length} discarded.`);
+  console.log(
+    `Parsed ${valid.length} valid finding(s), ${invalid.length} discarded.`
+  );
 
   // --- idempotency: what did earlier runs already say? --------------------
   const existing = await getReviewComments(REPO, PR_NUMBER);
   const alreadyPosted = new Set();
   for (const c of existing) {
-    const m = new RegExp(`<!-- ${MARKER} .*?fid=([a-z0-9]+)`).exec(c.body || '');
+    const m = new RegExp(`<!-- ${MARKER} .*?fid=([a-z0-9]+)`).exec(
+      c.body || ''
+    );
     if (m) alreadyPosted.add(m[1]);
   }
   console.log(`${alreadyPosted.size} finding(s) already posted on this PR.`);
@@ -203,12 +240,15 @@ async function main() {
     explorationPercent: book.defaults?.explorationPercent ?? 10,
     alreadyPosted,
   });
-  console.log(`${kept.length} finding(s) passed the gate, ${dropped.length} dropped.`);
+  console.log(
+    `${kept.length} finding(s) passed the gate, ${dropped.length} dropped.`
+  );
 
   // --- map to lines GitHub will accept ------------------------------------
   const files = await getPullFiles(REPO, PR_NUMBER);
   const lineIndex = new Map();
-  for (const file of files) lineIndex.set(file.filename, commentableLines(file.patch));
+  for (const file of files)
+    lineIndex.set(file.filename, commentableLines(file.patch));
 
   const inline = [];
   const outOfDiff = [];
@@ -225,7 +265,11 @@ async function main() {
       body: commentBody(f, rules[f.ruleId]),
     };
     // Multi-line comments need start_line to also be in the diff.
-    if (Number.isInteger(f.endLine) && f.endLine > f.line && allowed.has(f.endLine)) {
+    if (
+      Number.isInteger(f.endLine) &&
+      f.endLine > f.line &&
+      allowed.has(f.endLine)
+    ) {
       comment.start_line = f.line;
       comment.start_side = 'RIGHT';
       comment.line = f.endLine;
@@ -233,10 +277,12 @@ async function main() {
     inline.push(comment);
   }
   if (outOfDiff.length) {
-    console.log(`${outOfDiff.length} finding(s) fell outside the diff; moved into the summary.`);
+    console.log(
+      `${outOfDiff.length} finding(s) fell outside the diff; moved into the summary.`
+    );
   }
 
-  const hasBlocker = kept.some((f) => f.severity === 'blocker');
+  const hasBlocker = kept.some(f => f.severity === 'blocker');
   const body = summaryBody({
     summary: payload.summary,
     kept,
@@ -252,28 +298,36 @@ async function main() {
     return;
   }
 
-  writeFileSync('.claude-review/posted.json', JSON.stringify({ inline, outOfDiff, dropped }, null, 2));
+  writeFileSync(
+    '.claude-review/posted.json',
+    JSON.stringify({ inline, outOfDiff, dropped }, null, 2)
+  );
 
   try {
     await createReview(REPO, PR_NUMBER, {
       commitId: HEAD_SHA,
       body,
-      event: hasBlocker && REQUEST_CHANGES_ON_BLOCKER ? 'REQUEST_CHANGES' : 'COMMENT',
+      event:
+        hasBlocker && REQUEST_CHANGES_ON_BLOCKER
+          ? 'REQUEST_CHANGES'
+          : 'COMMENT',
       comments: inline,
     });
     console.log(`Posted a review with ${inline.length} inline comment(s).`);
   } catch (err) {
     // The review API is all-or-nothing. Rather than lose the whole review to
     // one bad line reference, fall back to a single summary comment.
-    console.error(`Inline review failed, falling back to a summary comment: ${err.message}`);
+    console.error(
+      `Inline review failed, falling back to a summary comment: ${err.message}`
+    );
     const fallback = [
       body,
       '',
       '### Findings',
       '',
       ...kept.map(
-        (f) =>
-          `- **${SEVERITY_LABEL[f.severity]} · ${f.ruleId}** \`${f.file}:${f.line}\` — ${f.title}\n\n  ${f.body.replace(/\n/g, '\n  ')}`,
+        f =>
+          `- **${SEVERITY_LABEL[f.severity]} · ${f.ruleId}** \`${f.file}:${f.line}\` — ${f.title}\n\n  ${f.body.replace(/\n/g, '\n  ')}`
       ),
     ].join('\n');
     try {
@@ -285,7 +339,7 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+main().catch(err => {
   // Log loudly, exit clean. The reviewer is advisory; it must never be the
   // reason a pull request cannot merge.
   console.error(`post-review failed: ${err.stack || err.message}`);

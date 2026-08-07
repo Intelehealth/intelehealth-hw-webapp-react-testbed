@@ -34,7 +34,7 @@ export function splitDiffByFile(diff) {
   if (!diff?.trim()) return [];
   const out = [];
   // Keep the `diff --git` header with its section.
-  const sections = diff.split(/(?=^diff --git )/m).filter((s) => s.trim());
+  const sections = diff.split(/(?=^diff --git )/m).filter(s => s.trim());
   for (const patch of sections) {
     // `diff --git a/path b/path` — take the b-side, which is the new path.
     const m = /^diff --git a\/(.+?) b\/(.+?)$/m.exec(patch);
@@ -68,7 +68,8 @@ export function packChunks(files, { budgetChars, maxChunks }) {
   for (const f of ordered) {
     let patch = f.patch;
     if (patch.length > budgetChars) {
-      patch = patch.slice(0, budgetChars) + '\n... [diff truncated for length] ...\n';
+      patch =
+        patch.slice(0, budgetChars) + '\n... [diff truncated for length] ...\n';
       truncated.push(f.file);
     }
     if (currentSize + patch.length > budgetChars && current.length) {
@@ -82,7 +83,8 @@ export function packChunks(files, { budgetChars, maxChunks }) {
   if (current.length) chunks.push(current);
 
   if (chunks.length > maxChunks) {
-    for (const chunk of chunks.slice(maxChunks)) skipped.push(...chunk.map((f) => f.file));
+    for (const chunk of chunks.slice(maxChunks))
+      skipped.push(...chunk.map(f => f.file));
     return { chunks: chunks.slice(0, maxChunks), skipped, truncated };
   }
   return { chunks, skipped, truncated };
@@ -104,10 +106,12 @@ export function extractJson(text) {
   // Reasoning models emit their scratchpad first.
   let s = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
-  const attempt = (candidate) => {
+  const attempt = candidate => {
     try {
       const parsed = JSON.parse(candidate);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : null;
     } catch {
       return null;
     }
@@ -177,7 +181,9 @@ export function buildRulesDigest(rules, isExploring = () => false) {
       exploring.push(id);
     }
     const note =
-      rule.state === 'probation' ? ' (only report at blocker/major severity)' : '';
+      rule.state === 'probation'
+        ? ' (only report at blocker/major severity)'
+        : '';
     lines.push(`${id} [${rule.severity}] ${rule.title}${note}`);
     included.push(id);
   }
@@ -186,7 +192,24 @@ export function buildRulesDigest(rules, isExploring = () => false) {
 }
 
 /**
- * Fetch the models that are currently free, largest context first.
+ * Rank candidate models best-first: structured-output support, then context.
+ *
+ * The whole pipeline depends on the reply parsing as strict JSON, and most free
+ * models cannot guarantee that. Ranking on context alone puts a large-context
+ * model that rambles ahead of a smaller one that answers in the required shape,
+ * and the rambling one then wins the chain and returns nothing usable.
+ *
+ * @param {Array<{id:string, context:number, structured:boolean}>} models
+ */
+export function rankModels(models) {
+  return [...models].sort(
+    (a, b) =>
+      Number(b.structured) - Number(a.structured) || b.context - a.context
+  );
+}
+
+/**
+ * Fetch the models that are currently free, best first.
  * @param {string} apiKey
  * @returns {Promise<Array<{id:string, context:number, structured:boolean}>>}
  */
@@ -194,17 +217,23 @@ export async function listFreeModels(apiKey) {
   const res = await fetch(`${BASE}/models`, {
     headers: { authorization: `Bearer ${apiKey}` },
   });
-  if (!res.ok) throw new Error(`GET /models -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok)
+    throw new Error(
+      `GET /models -> ${res.status}: ${(await res.text()).slice(0, 300)}`
+    );
   const { data } = await res.json();
 
-  return (data || [])
-    .filter((m) => typeof m.id === 'string' && m.id.endsWith(':free'))
-    .map((m) => ({
-      id: m.id,
-      context: Number(m.context_length) || 0,
-      structured: (m.supported_parameters || []).includes('structured_outputs'),
-    }))
-    .sort((a, b) => b.context - a.context);
+  return rankModels(
+    (data || [])
+      .filter(m => typeof m.id === 'string' && m.id.endsWith(':free'))
+      .map(m => ({
+        id: m.id,
+        context: Number(m.context_length) || 0,
+        structured: (m.supported_parameters || []).includes(
+          'structured_outputs'
+        ),
+      }))
+  );
 }
 
 /**
@@ -224,15 +253,19 @@ export const MAX_FALLBACK_MODELS = 3;
  * @param {string[]} preferred
  * @param {number} limit
  */
-export function chooseModels(available, preferred = [], limit = MAX_FALLBACK_MODELS) {
-  const byId = new Map(available.map((m) => [m.id, m]));
+export function chooseModels(
+  available,
+  preferred = [],
+  limit = MAX_FALLBACK_MODELS
+) {
+  const byId = new Map(available.map(m => [m.id, m]));
   const chain = [];
   for (const id of preferred) {
     if (byId.has(id)) chain.push(byId.get(id));
   }
   for (const m of available) {
     if (chain.length >= limit) break;
-    if (!chain.some((c) => c.id === m.id)) chain.push(m);
+    if (!chain.some(c => c.id === m.id)) chain.push(m);
   }
   return chain.slice(0, limit);
 }
@@ -294,16 +327,22 @@ export async function complete(opts) {
       const text = await res.text();
       if (!res.ok) {
         const retryable = res.status === 429 || res.status >= 500;
-        lastErr = new Error(`POST /chat/completions -> ${res.status}: ${text.slice(0, 400)}`);
+        lastErr = new Error(
+          `POST /chat/completions -> ${res.status}: ${text.slice(0, 400)}`
+        );
         if (!retryable || attempt === retries) throw lastErr;
-        const wait = Number(res.headers.get('retry-after')) * 1000 || 2 ** attempt * 4000;
-        await new Promise((r) => setTimeout(r, wait));
+        const wait =
+          Number(res.headers.get('retry-after')) * 1000 || 2 ** attempt * 4000;
+        await new Promise(r => setTimeout(r, wait));
         continue;
       }
 
       const json = JSON.parse(text);
       // OpenRouter can return a 200 whose body carries a provider error.
-      if (json.error) throw new Error(`provider error: ${JSON.stringify(json.error).slice(0, 300)}`);
+      if (json.error)
+        throw new Error(
+          `provider error: ${JSON.stringify(json.error).slice(0, 300)}`
+        );
       return {
         text: json.choices?.[0]?.message?.content ?? '',
         model: json.model || chain[0],
@@ -312,7 +351,7 @@ export async function complete(opts) {
     } catch (err) {
       lastErr = err;
       if (attempt === retries) throw lastErr;
-      await new Promise((r) => setTimeout(r, 2 ** attempt * 2000));
+      await new Promise(r => setTimeout(r, 2 ** attempt * 2000));
     }
   }
   throw lastErr;
@@ -321,7 +360,9 @@ export async function complete(opts) {
 /** Remaining free-tier allowance, for logging. Never throws. */
 export async function keyStatus(apiKey) {
   try {
-    const res = await fetch(`${BASE}/key`, { headers: { authorization: `Bearer ${apiKey}` } });
+    const res = await fetch(`${BASE}/key`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
     if (!res.ok) return null;
     const { data } = await res.json();
     return data || null;

@@ -14,7 +14,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { computeState, computeWeight, evidenceCount, PRIOR_ALPHA, PRIOR_BETA, round3 } from './lib/scoring.mjs';
+import {
+  computeState,
+  computeWeight,
+  evidenceCount,
+  PRIOR_ALPHA,
+  PRIOR_BETA,
+  round3,
+} from './lib/scoring.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MD_PATH = join(HERE, '..', 'review-rules.md');
@@ -24,13 +31,15 @@ const SEED_WEIGHT = round3(PRIOR_ALPHA / (PRIOR_ALPHA + PRIOR_BETA)); // 0.7
 
 /** Extract `**ID · severity · Title.**` headings from the rulebook. */
 export function parseRulebook(markdown) {
-  const re = /^\*\*([A-Z]+-\d+)\s*[·.]\s*(blocker|major|minor|nit)\s*[·.]\s*([^*]+?)\*\*/gm;
+  const re =
+    /^\*\*([A-Z]+-\d+)\s*[·.]\s*(blocker|major|minor|nit)\s*[·.]\s*([^*]+?)\*\*/gm;
   const rules = {};
   const seen = new Set();
   let m;
   while ((m = re.exec(markdown)) !== null) {
     const [, id, severity, title] = m;
-    if (seen.has(id)) throw new Error(`Duplicate rule id in review-rules.md: ${id}`);
+    if (seen.has(id))
+      throw new Error(`Duplicate rule id in review-rules.md: ${id}`);
     seen.add(id);
     rules[id] = { title: title.trim().replace(/\.$/, ''), severity };
   }
@@ -85,11 +94,20 @@ function reconcile(md, book) {
     const weight = computeWeight(stats);
     const state = computeState(weight, evidenceCount(stats));
 
-    if (existing.title !== meta.title) problems.push(`${id}: title differs from review-rules.md`);
-    if (existing.severity !== meta.severity) problems.push(`${id}: severity differs from review-rules.md`);
-    if (existing.weight !== weight) problems.push(`${id}: weight ${existing.weight} does not match stats (${weight})`);
-    if (existing.state !== state) problems.push(`${id}: state ${existing.state} does not match weight (${state})`);
-    if (book.retired[id]) problems.push(`${id}: listed as retired but present in review-rules.md`);
+    if (existing.title !== meta.title)
+      problems.push(`${id}: title differs from review-rules.md`);
+    if (existing.severity !== meta.severity)
+      problems.push(`${id}: severity differs from review-rules.md`);
+    if (existing.weight !== weight)
+      problems.push(
+        `${id}: weight ${existing.weight} does not match stats (${weight})`
+      );
+    if (existing.state !== state)
+      problems.push(
+        `${id}: state ${existing.state} does not match weight (${state})`
+      );
+    if (book.retired[id])
+      problems.push(`${id}: listed as retired but present in review-rules.md`);
 
     rules[id] = {
       title: meta.title,
@@ -104,7 +122,9 @@ function reconcile(md, book) {
   const retired = { ...book.retired };
   for (const id of Object.keys(book.rules)) {
     if (md[id]) continue;
-    problems.push(`${id} is in rules.json but not in review-rules.md (will be retired)`);
+    problems.push(
+      `${id} is in rules.json but not in review-rules.md (will be retired)`
+    );
     retired[id] = { ...book.rules[id], retired: true };
   }
   for (const id of Object.keys(md)) delete retired[id];
@@ -117,7 +137,9 @@ function main() {
   const { md, book } = load();
   const count = Object.keys(md).length;
   if (count === 0) {
-    console.error('No rules parsed from review-rules.md — check the heading format.');
+    console.error(
+      'No rules parsed from review-rules.md — check the heading format.'
+    );
     process.exit(1);
   }
 
@@ -125,9 +147,13 @@ function main() {
 
   if (mode === 'check') {
     if (problems.length) {
-      console.error(`rules.json is out of sync with review-rules.md (${problems.length} problem(s)):`);
+      console.error(
+        `rules.json is out of sync with review-rules.md (${problems.length} problem(s)):`
+      );
       for (const p of problems) console.error(`  - ${p}`);
-      console.error('\nRun: node .github/review/scripts/sync-rules.mjs --write');
+      console.error(
+        '\nRun: node .github/review/scripts/sync-rules.mjs --write'
+      );
       process.exit(1);
     }
     console.log(`rules.json is in sync (${count} rules).`);
@@ -142,7 +168,9 @@ function main() {
     retired,
   };
   writeFileSync(JSON_PATH, JSON.stringify(next, null, 2) + '\n');
-  console.log(`Wrote rules.json: ${count} active rules, ${Object.keys(retired).length} retired.`);
+  console.log(
+    `Wrote rules.json: ${count} active rules, ${Object.keys(retired).length} retired.`
+  );
   for (const p of problems) console.log(`  - ${p}`);
 }
 

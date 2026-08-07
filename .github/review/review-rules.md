@@ -43,7 +43,7 @@ how `$ne`/`$gt` operator injection gets in.
 **SEC-002 · blocker · Missing authentication or authorisation on a new route.**
 A new Express route, NestJS controller method, or Socket.IO event handler that
 does not sit behind the project's auth guard/middleware, or that authenticates
-the caller but never checks that the caller is allowed to touch *this* record.
+the caller but never checks that the caller is allowed to touch _this_ record.
 Broken object-level authorisation is the most common real vulnerability in this
 kind of codebase; flag it explicitly rather than assuming a guard exists further
 up.
@@ -295,6 +295,14 @@ failure points.
 **OPS-004 · minor · Backwards-incompatible change with no deploy ordering
 note.** A change that requires the migration, the API, and the client to ship in
 a particular order, with nothing in the PR description saying so.
+
+**OPS-005 · major · Automated safety net removed or weakened.** A CI workflow,
+test, coverage threshold, lint rule, or type check deleted, disabled, or
+loosened, without the PR saying what replaces it. Includes skipping tests
+(`.skip`, `xit`), lowering a coverage floor, adding a broad `eslint-disable` at
+file scope, and removing a required status check. Say which protection is being
+given up and what now catches that class of problem instead. A deliberate
+removal is fine; an unexplained one is how a repo quietly loses its guardrails.
 
 ---
 

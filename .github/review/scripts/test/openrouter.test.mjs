@@ -22,6 +22,7 @@ import {
   chooseModels,
   extractJson,
   packChunks,
+  rankModels,
   splitDiffByFile,
 } from '../lib/openrouter.mjs';
 
@@ -48,13 +49,20 @@ index 333..444 100644
 
 test('splits a diff into per-file sections keyed by the new path', () => {
   const files = splitDiffByFile(DIFF);
-  assert.deepEqual(files.map((f) => f.file), ['src/a.ts', 'src/b.ts']);
+  assert.deepEqual(
+    files.map(f => f.file),
+    ['src/a.ts', 'src/b.ts']
+  );
   assert.match(files[0].patch, /const y = 2/);
-  assert.ok(!files[0].patch.includes('const z = 3'), 'sections must not bleed into each other');
+  assert.ok(
+    !files[0].patch.includes('const z = 3'),
+    'sections must not bleed into each other'
+  );
 });
 
 test('a renamed file is keyed by its new path', () => {
-  const renamed = 'diff --git a/old/name.ts b/new/name.ts\n--- a/old/name.ts\n+++ b/new/name.ts\n@@ -1 +1 @@\n+x\n';
+  const renamed =
+    'diff --git a/old/name.ts b/new/name.ts\n--- a/old/name.ts\n+++ b/new/name.ts\n@@ -1 +1 @@\n+x\n';
   assert.equal(splitDiffByFile(renamed)[0].file, 'new/name.ts');
 });
 
@@ -65,21 +73,31 @@ test('an empty diff yields no sections', () => {
 
 // --- chunk packing ---------------------------------------------------------
 
-const mkFiles = (sizes) => sizes.map((n, i) => ({ file: `f${i}.ts`, patch: 'x'.repeat(n) }));
+const mkFiles = sizes =>
+  sizes.map((n, i) => ({ file: `f${i}.ts`, patch: 'x'.repeat(n) }));
 
 test('small files are packed together into one request', () => {
-  const { chunks } = packChunks(mkFiles([100, 100, 100]), { budgetChars: 1000, maxChunks: 4 });
+  const { chunks } = packChunks(mkFiles([100, 100, 100]), {
+    budgetChars: 1000,
+    maxChunks: 4,
+  });
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].length, 3);
 });
 
 test('files are split across requests once the budget is exceeded', () => {
-  const { chunks } = packChunks(mkFiles([600, 600, 600]), { budgetChars: 1000, maxChunks: 4 });
+  const { chunks } = packChunks(mkFiles([600, 600, 600]), {
+    budgetChars: 1000,
+    maxChunks: 4,
+  });
   assert.equal(chunks.length, 3);
 });
 
 test('a file larger than the budget is truncated rather than dropped', () => {
-  const { chunks, truncated } = packChunks(mkFiles([5000]), { budgetChars: 1000, maxChunks: 4 });
+  const { chunks, truncated } = packChunks(mkFiles([5000]), {
+    budgetChars: 1000,
+    maxChunks: 4,
+  });
   assert.deepEqual(truncated, ['f0.ts']);
   assert.equal(chunks.length, 1);
   assert.match(chunks[0][0].patch, /diff truncated for length/);
@@ -87,7 +105,10 @@ test('a file larger than the budget is truncated rather than dropped', () => {
 });
 
 test('the request cap reports what it dropped instead of silently truncating', () => {
-  const { chunks, skipped } = packChunks(mkFiles([900, 900, 900, 900]), { budgetChars: 1000, maxChunks: 2 });
+  const { chunks, skipped } = packChunks(mkFiles([900, 900, 900, 900]), {
+    budgetChars: 1000,
+    maxChunks: 2,
+  });
   assert.equal(chunks.length, 2);
   assert.equal(skipped.length, 2);
 });
@@ -96,10 +117,16 @@ test('one huge file does not starve the small ones behind it', () => {
   // With only one request available and a file that fills the whole budget,
   // the small file must still be the one that gets reviewed.
   const { chunks, skipped } = packChunks(
-    [{ file: 'big.ts', patch: 'x'.repeat(1000) }, { file: 'small.ts', patch: 'y'.repeat(10) }],
-    { budgetChars: 1000, maxChunks: 1 },
+    [
+      { file: 'big.ts', patch: 'x'.repeat(1000) },
+      { file: 'small.ts', patch: 'y'.repeat(10) },
+    ],
+    { budgetChars: 1000, maxChunks: 1 }
   );
-  assert.deepEqual(chunks[0].map((f) => f.file), ['small.ts']);
+  assert.deepEqual(
+    chunks[0].map(f => f.file),
+    ['small.ts']
+  );
   assert.deepEqual(skipped, ['big.ts']);
 });
 
@@ -112,8 +139,14 @@ test('parses a clean JSON reply', () => {
 });
 
 test('recovers JSON from markdown fences', () => {
-  assert.deepEqual(extractJson('```json\n' + OBJ + '\n```'), { summary: 'ok', findings: [] });
-  assert.deepEqual(extractJson('```\n' + OBJ + '\n```'), { summary: 'ok', findings: [] });
+  assert.deepEqual(extractJson('```json\n' + OBJ + '\n```'), {
+    summary: 'ok',
+    findings: [],
+  });
+  assert.deepEqual(extractJson('```\n' + OBJ + '\n```'), {
+    summary: 'ok',
+    findings: [],
+  });
 });
 
 test('recovers JSON despite narration before and after', () => {
@@ -122,10 +155,13 @@ test('recovers JSON despite narration before and after', () => {
 });
 
 test('strips a reasoning model scratchpad', () => {
-  assert.deepEqual(extractJson(`<think>Let me look at this...</think>\n${OBJ}`), {
-    summary: 'ok',
-    findings: [],
-  });
+  assert.deepEqual(
+    extractJson(`<think>Let me look at this...</think>\n${OBJ}`),
+    {
+      summary: 'ok',
+      findings: [],
+    }
+  );
 });
 
 test('handles braces inside strings without losing the object', () => {
@@ -143,7 +179,11 @@ test('returns null rather than guessing on unusable output', () => {
   assert.equal(extractJson(''), null);
   assert.equal(extractJson(null), null);
   assert.equal(extractJson('{"broken": '), null);
-  assert.equal(extractJson('[1,2,3]'), null, 'a bare array is not the expected shape');
+  assert.equal(
+    extractJson('[1,2,3]'),
+    null,
+    'a bare array is not the expected shape'
+  );
 });
 
 // --- rules digest ----------------------------------------------------------
@@ -162,11 +202,14 @@ test('the digest omits muted rules, so the model cannot report them', () => {
 
 test('probation rules are included with their severity restriction', () => {
   const { digest } = buildRulesDigest(RULES, () => false);
-  assert.match(digest, /FE-005 \[minor\] Index key \(only report at blocker\/major severity\)/);
+  assert.match(
+    digest,
+    /FE-005 \[minor\] Index key \(only report at blocker\/major severity\)/
+  );
 });
 
 test('an exploration slot puts a muted rule back in play', () => {
-  const { digest, exploring } = buildRulesDigest(RULES, (id) => id === 'TS-004');
+  const { digest, exploring } = buildRulesDigest(RULES, id => id === 'TS-004');
   assert.match(digest, /TS-004/);
   assert.deepEqual(exploring, ['TS-004']);
 });
@@ -192,7 +235,11 @@ test('preferred models lead the chain when they are still available', () => {
 });
 
 test('a preferred model that no longer exists is skipped, not fatal', () => {
-  const chain = chooseModels(AVAILABLE, ['retired/model:free', 'small/model:free'], 2);
+  const chain = chooseModels(
+    AVAILABLE,
+    ['retired/model:free', 'small/model:free'],
+    2
+  );
   assert.equal(chain[0].id, 'small/model:free');
 });
 
@@ -204,6 +251,37 @@ test('the chain never exceeds the requested length', () => {
   assert.equal(chooseModels(AVAILABLE, [], 2).length, 2);
 });
 
+test('a model that guarantees JSON outranks a bigger one that does not', () => {
+  // The regression this locks in: ranking on context alone put a 262k model
+  // with no structured-output support ahead of a 128k model that had it, and
+  // the big one returned prose the parser could not read.
+  const ranked = rankModels(AVAILABLE);
+  assert.equal(ranked[0].id, 'mid/model:free');
+  assert.ok(
+    ranked.every(
+      (m, i) => i === 0 || !m.structured || ranked[i - 1].structured
+    ),
+    'every structured model sorts ahead of every unstructured one'
+  );
+});
+
+test('among equally capable models the larger context still wins', () => {
+  const ranked = rankModels([
+    { id: 'small/structured:free', context: 8000, structured: true },
+    { id: 'large/structured:free', context: 262144, structured: true },
+  ]);
+  assert.equal(ranked[0].id, 'large/structured:free');
+});
+
+test('ranking does not mutate the caller array', () => {
+  const input = [...AVAILABLE];
+  rankModels(input);
+  assert.deepEqual(
+    input.map(m => m.id),
+    AVAILABLE.map(m => m.id)
+  );
+});
+
 // --- end to end ------------------------------------------------------------
 
 async function startStub({ replies, models = AVAILABLE }) {
@@ -211,7 +289,7 @@ async function startStub({ replies, models = AVAILABLE }) {
   let i = 0;
   const server = createServer((req, res) => {
     let body = '';
-    req.on('data', (c) => (body += c));
+    req.on('data', c => (body += c));
     req.on('end', () => {
       const send = (code, payload) => {
         res.writeHead(code, { 'content-type': 'application/json' });
@@ -219,18 +297,20 @@ async function startStub({ replies, models = AVAILABLE }) {
       };
       if (req.url.endsWith('/models')) {
         return send(200, {
-          data: models.map((m) => ({
+          data: models.map(m => ({
             id: m.id,
             context_length: m.context,
             supported_parameters: m.structured ? ['structured_outputs'] : [],
           })),
         });
       }
-      if (req.url.endsWith('/key')) return send(200, { data: { usage: 1, limit: null } });
+      if (req.url.endsWith('/key'))
+        return send(200, { data: { usage: 1, limit: null } });
       if (req.url.endsWith('/chat/completions')) {
         calls.push(JSON.parse(body));
         const reply = replies[Math.min(i++, replies.length - 1)];
-        if (reply.status && reply.status !== 200) return send(reply.status, { error: reply.body });
+        if (reply.status && reply.status !== 200)
+          return send(reply.status, { error: reply.body });
         return send(200, {
           model: reply.model || 'big/model:free',
           choices: [{ message: { content: reply.content } }],
@@ -240,7 +320,7 @@ async function startStub({ replies, models = AVAILABLE }) {
       send(404, {});
     });
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
   return { server, calls, port: server.address().port };
 }
 
@@ -257,10 +337,16 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
     await mkdir(join(reviewDir, 'scripts', 'lib'), { recursive: true });
     await writeFile(join(reviewDir, 'rules.json'), JSON.stringify(rules));
     for (const f of ['openrouter-review.mjs']) {
-      await writeFile(join(reviewDir, 'scripts', f), await readFile(join(HERE, '..', f)));
+      await writeFile(
+        join(reviewDir, 'scripts', f),
+        await readFile(join(HERE, '..', f))
+      );
     }
     for (const f of ['openrouter.mjs', 'scoring.mjs']) {
-      await writeFile(join(reviewDir, 'scripts', 'lib', f), await readFile(join(HERE, '..', 'lib', f)));
+      await writeFile(
+        join(reviewDir, 'scripts', 'lib', f),
+        await readFile(join(HERE, '..', 'lib', f))
+      );
     }
     scriptPath = join(reviewDir, 'scripts', 'openrouter-review.mjs');
   }
@@ -275,7 +361,9 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
       ...env,
     },
   });
-  const findings = JSON.parse(await readFile(join(dir, '.claude-review', 'findings.json'), 'utf8'));
+  const findings = JSON.parse(
+    await readFile(join(dir, '.claude-review', 'findings.json'), 'utf8')
+  );
   await rm(dir, { recursive: true, force: true });
   return { stdout, stderr, findings };
 }
@@ -284,7 +372,13 @@ const RULES_FILE = {
   version: 1,
   defaults: { explorationPercent: 0 },
   rules: {
-    'SEC-001': { title: 'Injection', severity: 'blocker', state: 'active', weight: 0.7, stats: {} },
+    'SEC-001': {
+      title: 'Injection',
+      severity: 'blocker',
+      state: 'active',
+      weight: 0.7,
+      stats: {},
+    },
   },
 };
 
@@ -300,7 +394,14 @@ const goodFinding = {
 
 test('produces findings.json in the schema post-review.mjs expects', async () => {
   const stub = await startStub({
-    replies: [{ content: JSON.stringify({ summary: 'Looks risky.', findings: [goodFinding] }) }],
+    replies: [
+      {
+        content: JSON.stringify({
+          summary: 'Looks risky.',
+          findings: [goodFinding],
+        }),
+      },
+    ],
   });
   try {
     const { findings } = await runReview(stub, { rules: RULES_FILE });
@@ -316,7 +417,12 @@ test('produces findings.json in the schema post-review.mjs expects', async () =>
 test('narrated and fenced replies still yield findings', async () => {
   const stub = await startStub({
     replies: [
-      { content: 'Sure!\n```json\n' + JSON.stringify({ summary: 's', findings: [goodFinding] }) + '\n```\nHope that helps!' },
+      {
+        content:
+          'Sure!\n```json\n' +
+          JSON.stringify({ summary: 's', findings: [goodFinding] }) +
+          '\n```\nHope that helps!',
+      },
     ],
   });
   try {
@@ -346,7 +452,11 @@ test('invented rule IDs and file paths are discarded', async () => {
   });
   try {
     const { findings, stdout } = await runReview(stub, { rules: RULES_FILE });
-    assert.equal(findings.findings.length, 1, 'only the valid finding survives');
+    assert.equal(
+      findings.findings.length,
+      1,
+      'only the valid finding survives'
+    );
     assert.match(stdout, /4 rejected/);
   } finally {
     stub.server.close();
@@ -357,7 +467,12 @@ test('an unparseable reply triggers exactly one repair attempt', async () => {
   const stub = await startStub({
     replies: [
       { content: 'I am unable to produce JSON right now.' },
-      { content: JSON.stringify({ summary: 'recovered', findings: [goodFinding] }) },
+      {
+        content: JSON.stringify({
+          summary: 'recovered',
+          findings: [goodFinding],
+        }),
+      },
     ],
   });
   try {
@@ -371,9 +486,14 @@ test('an unparseable reply triggers exactly one repair attempt', async () => {
 });
 
 test('a rate limited batch degrades to a partial review, not a crash', async () => {
-  const stub = await startStub({ replies: [{ status: 429, body: { message: 'rate limited' } }] });
+  const stub = await startStub({
+    replies: [{ status: 429, body: { message: 'rate limited' } }],
+  });
   try {
-    const { findings, stderr } = await runReview(stub, { rules: RULES_FILE, env: { MAX_REQUESTS: '1' } });
+    const { findings, stderr } = await runReview(stub, {
+      rules: RULES_FILE,
+      env: { MAX_REQUESTS: '1' },
+    });
     assert.deepEqual(findings.findings, []);
     assert.match(findings.summary, /failed/i);
     assert.match(stderr, /429/);
@@ -385,7 +505,10 @@ test('a rate limited batch degrades to a partial review, not a crash', async () 
 test('a missing API key writes an empty review instead of failing the job', async () => {
   const stub = await startStub({ replies: [{ content: OBJ }] });
   try {
-    const { findings } = await runReview(stub, { rules: RULES_FILE, env: { OPENROUTER_API_KEY: '' } });
+    const { findings } = await runReview(stub, {
+      rules: RULES_FILE,
+      env: { OPENROUTER_API_KEY: '' },
+    });
     assert.deepEqual(findings.findings, []);
     assert.match(findings.summary, /no OpenRouter API key/i);
   } finally {
@@ -394,10 +517,14 @@ test('a missing API key writes an empty review instead of failing the job', asyn
 });
 
 test('the request budget is respected and what was dropped is reported', async () => {
-  const many = Array.from({ length: 6 }, (_, i) =>
-    `diff --git a/f${i}.ts b/f${i}.ts\n--- a/f${i}.ts\n+++ b/f${i}.ts\n@@ -1 +1,2 @@\n+${'x'.repeat(30000)}\n`,
+  const many = Array.from(
+    { length: 6 },
+    (_, i) =>
+      `diff --git a/f${i}.ts b/f${i}.ts\n--- a/f${i}.ts\n+++ b/f${i}.ts\n@@ -1 +1,2 @@\n+${'x'.repeat(30000)}\n`
   ).join('');
-  const stub = await startStub({ replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }] });
+  const stub = await startStub({
+    replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }],
+  });
   try {
     const { findings, stdout } = await runReview(stub, {
       diff: many,
@@ -413,10 +540,15 @@ test('the request budget is respected and what was dropped is reported', async (
 });
 
 test('the fallback chain is sent so OpenRouter can reroute on rate limits', async () => {
-  const stub = await startStub({ replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }] });
+  const stub = await startStub({
+    replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }],
+  });
   try {
     await runReview(stub, { rules: RULES_FILE });
-    assert.ok(Array.isArray(stub.calls[0].models), 'models array must be present');
+    assert.ok(
+      Array.isArray(stub.calls[0].models),
+      'models array must be present'
+    );
     assert.ok(stub.calls[0].models.length > 1, 'needs at least one fallback');
     assert.equal(stub.calls[0].temperature, 0.1);
   } finally {
@@ -427,11 +559,18 @@ test('the fallback chain is sent so OpenRouter can reroute on rate limits', asyn
 test('JSON mode is only requested when every model in the chain supports it', async () => {
   const mixed = await startStub({
     replies: [{ content: OBJ }],
-    models: [{ id: 'a:free', context: 100000, structured: true }, { id: 'b:free', context: 90000, structured: false }],
+    models: [
+      { id: 'a:free', context: 100000, structured: true },
+      { id: 'b:free', context: 90000, structured: false },
+    ],
   });
   try {
     await runReview(mixed, { rules: RULES_FILE });
-    assert.equal(mixed.calls[0].response_format, undefined, 'would 400 on the non-supporting fallback');
+    assert.equal(
+      mixed.calls[0].response_format,
+      undefined,
+      'would 400 on the non-supporting fallback'
+    );
   } finally {
     mixed.server.close();
   }
@@ -442,7 +581,9 @@ test('JSON mode is only requested when every model in the chain supports it', as
   });
   try {
     await runReview(allStructured, { rules: RULES_FILE });
-    assert.deepEqual(allStructured.calls[0].response_format, { type: 'json_object' });
+    assert.deepEqual(allStructured.calls[0].response_format, {
+      type: 'json_object',
+    });
   } finally {
     allStructured.server.close();
   }
