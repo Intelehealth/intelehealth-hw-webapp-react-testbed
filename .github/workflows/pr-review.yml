@@ -2,45 +2,145 @@ name: PR Review
 
 # Automated PR review using OpenRouter free models.
 #
-# Same three-step shape as before — prepare the diff, generate findings, post
-# them — but the middle step is now a plain script calling OpenRouter instead of
-# an agentic action. post-review.mjs, the rule gating and the feedback loop are
-# untouched: only the thing producing findings.json changed.
+# Three steps — prepare the diff, generate findings, post them. post-review.mjs,
+# the rule gating and the feedback loop are provider-agnostic: only the middle
+# step knows it is talking to OpenRouter.
+#
+# When this runs:
+#   - a PR into main or dev is opened, reopened, or marked ready for review
+#   - someone adds the `review-again` label to such a PR
+#   - someone with write access comments `/review` on it
+#
+# Deliberately NOT on `synchronize`. Pushing follow-up commits to an open PR
+# does not re-review it, which keeps the OpenRouter free tier (50 requests/day,
+# 4 per review) from being spent on work-in-progress. The cost is that a review
+# goes stale as soon as the author pushes a fix — re-request it with the label
+# or the comment when the diff has moved enough to be worth another pass.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, labeled]
+    # Base branch, i.e. what the PR merges INTO. PRs targeting anything else
+    # (qa, staging, feature branches) are not reviewed.
+    branches: [main, dev]
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   review:
+    # Two ways in. The pull_request path is filtered by `branches:` above; the
+    # issue_comment path cannot be (that event has no branch context), so the
+    # base branch is checked in the Resolve step instead.
+    #
+    # `/review` is restricted to people with write access. Without that gate any
+    # drive-by commenter could burn the day's request budget.
     if: >
-      github.event.pull_request.draft == false &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-review')
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        !contains(github.event.pull_request.labels.*.name, 'skip-review') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'review-again')
+      ) || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        startsWith(github.event.comment.body, '/review') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
+      issues: write
 
     steps:
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "pull_request" ]; then
+            NUMBER="$PR_FROM_EVENT"
+          else
+            NUMBER="$ISSUE_NUMBER"
+          fi
+
+          # Read head/base from the API rather than the event payload so both
+          # entry points agree, and so a comment made minutes ago still resolves
+          # to the PR's current head.
+          DATA=$(gh pr view "$NUMBER" --repo "$REPO" \
+            --json headRefOid,baseRefOid,baseRefName,isDraft,labels,state)
+
+          BASE_REF=$(echo "$DATA" | jq -r .baseRefName)
+          IS_DRAFT=$(echo "$DATA" | jq -r .isDraft)
+          STATE=$(echo "$DATA" | jq -r .state)
+          SKIP=$(echo "$DATA" | jq -r '[.labels[].name] | index("skip-review") // "" ')
+
+          # The `branches:` filter does not apply to issue_comment, so enforce
+          # the same rule here for the comment path.
+          if [ "$BASE_REF" != "main" ] && [ "$BASE_REF" != "dev" ]; then
+            echo "PR #${NUMBER} targets '${BASE_REF}', not main or dev. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$STATE" != "OPEN" ]; then
+            echo "PR #${NUMBER} is ${STATE}. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "PR #${NUMBER} is a draft. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -n "$SKIP" ]; then
+            echo "PR #${NUMBER} carries skip-review. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          {
+            echo "run=true"
+            echo "number=${NUMBER}"
+            echo "head_sha=$(echo "$DATA" | jq -r .headRefOid)"
+            echo "base_sha=$(echo "$DATA" | jq -r .baseRefOid)"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Reviewing PR #${NUMBER} into ${BASE_REF}."
+
+      - name: Acknowledge the request
+        if: steps.pr.outputs.run == 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X POST \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes --silent || true
+
       - name: Checkout
+        if: steps.pr.outputs.run == 'true'
         uses: actions/checkout@v6
         with:
+          ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
+        if: steps.pr.outputs.run == 'true'
         with:
           node-version: '20'
 
       - name: Prepare diff
+        if: steps.pr.outputs.run == 'true'
         id: prep
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
           mkdir -p .claude-review
@@ -61,37 +161,50 @@ jobs:
           echo "Diff: ${BYTES} bytes, $(wc -l < .claude-review/changed-files.txt) file(s)."
 
       - name: Generate findings
+        if: steps.pr.outputs.run == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Optional. Preferred models, best first — any that are no longer free
           # are skipped and the script falls back to whatever currently is.
-          # Leave unset to just use the largest-context free models available.
+          # Leave unset and it picks structured-output-capable free models,
+          # largest context first.
           OPENROUTER_MODELS: ${{ vars.OPENROUTER_MODELS }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           # Passed as env, not interpolated into a shell command — a PR title is
           # attacker-controlled text and must never reach a `run:` block inline.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           # Each batch is one OpenRouter request. The free tier allows 50 per
-          # day, or 1000 once the account has bought $10 of credit. Four keeps a
-          # busy repo inside the smaller budget.
+          # day, or 1000 once the account has bought $10 of credit.
           MAX_REQUESTS: '4'
         run: node .github/review/scripts/openrouter-review.mjs
 
       - name: Post review
+        if: steps.pr.outputs.run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REQUEST_CHANGES_ON_BLOCKER: '0'
         run: node .github/review/scripts/post-review.mjs
 
+      - name: Clear the review-again label
+        # Removed so it can be applied again. A label that stays put can only
+        # trigger once, which is a confusing way for an on-demand switch to fail.
+        if: always() && github.event.action == 'labeled' && github.event.label.name == 'review-again'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X DELETE \
+            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/review-again" \
+            --silent || true
+
       - name: Upload artifacts
-        if: always()
+        if: always() && steps.pr.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: review-${{ github.event.pull_request.number }}
+          name: review-${{ steps.pr.outputs.number }}
           path: .claude-review/
           retention-days: 14
           if-no-files-found: warn

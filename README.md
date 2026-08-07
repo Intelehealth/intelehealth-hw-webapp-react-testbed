@@ -77,9 +77,17 @@ This project uses **Husky** to enforce code quality standards before each commit
 
 ## 🤖 Automated PR Review
 
-Every non-draft pull request is reviewed against a written rulebook at [.github/review/review-rules.md](.github/review/review-rules.md) — 56 rules covering security, PHI handling, data access, async correctness, realtime, frontend, TypeScript, tests, and ops.
+Pull requests are reviewed against a written rulebook at [.github/review/review-rules.md](.github/review/review-rules.md) — 56 rules covering security, PHI handling, data access, async correctness, realtime, frontend, TypeScript, tests, and ops.
 
-**How it runs** ([.github/workflows/pr-review.yml](.github/workflows/pr-review.yml)):
+**When it runs** ([.github/workflows/pr-review.yml](.github/workflows/pr-review.yml)):
+
+- a non-draft PR **into `main` or `dev`** is opened, reopened, or marked ready for review
+- someone adds the **`review-again`** label (removed afterwards, so it can be reapplied)
+- someone with write access comments **`/review`**
+
+It does **not** re-review on every push. That keeps the free-tier budget for changes worth reading, at the cost of a review going stale once the author pushes a fix — ask for a fresh one with the label or the comment.
+
+**How it runs:**
 
 1. **Prepare** — computes the diff against the merge base, excluding lockfiles, snapshots, and build output
 2. **Review** — sends the diff and a rules digest to a free OpenRouter model, producing structured findings
@@ -92,6 +100,8 @@ Every non-draft pull request is reviewed against a written rulebook at [.github/
 **Required setup:** an `OPENROUTER_API_KEY` repository secret. Turn training **off** for free models in OpenRouter's privacy settings before enabling — diffs of clinical code can carry table names, field names, and fixture data.
 
 **Opting out:** add the `skip-review` label to a PR. The review never blocks a merge; it posts as a comment.
+
+**Note:** `/review` only works once this is merged to `main` — GitHub runs comment-triggered workflows from the default branch. The label and the open/reopen triggers work from a PR branch immediately.
 
 Adding or removing a rule means editing `review-rules.md` and running `node .github/review/scripts/sync-rules.mjs --write`. CI fails any PR where the rulebook and `rules.json` disagree. Full design notes: [.github/review/README.md](.github/review/README.md).
 
