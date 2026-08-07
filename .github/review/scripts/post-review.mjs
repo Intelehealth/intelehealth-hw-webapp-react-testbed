@@ -96,7 +96,11 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
   lines.push(summary || '_No summary was produced._', '');
 
   if (kept.length === 0) {
-    lines.push('No findings above the confidence threshold. Nothing to flag.');
+    // A clean verdict is only honest when something was actually read. The
+    // generator says so in the summary when it reviewed nothing at all.
+    if (!/nothing was reviewed/i.test(summary || '')) {
+      lines.push('No findings above the confidence threshold. Nothing to flag.');
+    }
   } else {
     lines.push(
       'Findings: ' +

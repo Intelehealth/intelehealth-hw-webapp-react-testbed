@@ -208,6 +208,12 @@ export async function listFreeModels(apiKey) {
 }
 
 /**
+ * OpenRouter rejects a `models` fallback array longer than this with a 400.
+ * Every chain that reaches the API is clamped to it.
+ */
+export const MAX_FALLBACK_MODELS = 3;
+
+/**
  * Choose the model chain to send.
  *
  * `preferred` wins where those models are actually available today; anything
@@ -218,7 +224,7 @@ export async function listFreeModels(apiKey) {
  * @param {string[]} preferred
  * @param {number} limit
  */
-export function chooseModels(available, preferred = [], limit = 4) {
+export function chooseModels(available, preferred = [], limit = MAX_FALLBACK_MODELS) {
   const byId = new Map(available.map((m) => [m.id, m]));
   const chain = [];
   for (const id of preferred) {
@@ -256,8 +262,10 @@ export async function complete(opts) {
     title = 'PR Review Agent',
   } = opts;
 
+  const chain = models.slice(0, MAX_FALLBACK_MODELS);
+
   const body = {
-    model: models[0],
+    model: chain[0],
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -265,7 +273,7 @@ export async function complete(opts) {
     temperature: 0.1,
     max_tokens: maxTokens,
   };
-  if (models.length > 1) body.models = models;
+  if (chain.length > 1) body.models = chain;
   if (jsonMode) body.response_format = { type: 'json_object' };
 
   let lastErr;
@@ -298,7 +306,7 @@ export async function complete(opts) {
       if (json.error) throw new Error(`provider error: ${JSON.stringify(json.error).slice(0, 300)}`);
       return {
         text: json.choices?.[0]?.message?.content ?? '',
-        model: json.model || models[0],
+        model: json.model || chain[0],
         usage: json.usage || null,
       };
     } catch (err) {

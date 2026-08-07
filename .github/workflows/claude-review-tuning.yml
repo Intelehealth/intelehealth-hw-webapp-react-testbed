@@ -43,7 +43,9 @@ jobs:
       - name: Check rules.json matches review-rules.md
         run: node .github/review/scripts/sync-rules.mjs --check
       - name: Unit tests
-        run: node --test '.github/review/scripts/test/*.test.mjs'
+        # Unquoted so the shell expands it. `node --test` only expands globs
+        # itself on Node 21+, and this workflow pins Node 20.
+        run: node --test .github/review/scripts/test/*.test.mjs
 
   tune:
     if: github.event_name != 'pull_request'

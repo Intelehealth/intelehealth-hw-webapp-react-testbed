@@ -27,6 +27,7 @@ import {
   extractJson,
   keyStatus,
   listFreeModels,
+  MAX_FALLBACK_MODELS,
   packChunks,
   splitDiffByFile,
   CHARS_PER_TOKEN,
@@ -222,7 +223,7 @@ async function main() {
     return;
   }
 
-  const chain = chooseModels(available, PREFERRED, 4);
+  const chain = chooseModels(available, PREFERRED, MAX_FALLBACK_MODELS);
   const minContext = Math.min(...chain.map((m) => m.context));
   const jsonMode = chain.every((m) => m.structured);
   console.log(`Model chain: ${chain.map((m) => m.id).join(' -> ')}`);
@@ -339,7 +340,15 @@ async function main() {
   if (skipped.length) {
     notes.push(`Not reviewed — hit the ${MAX_REQUESTS}-request budget: ${skipped.join(', ')}.`);
   }
-  if (failures) notes.push(`${failures} of ${chunks.length} batch(es) failed and were skipped.`);
+  if (failures === chunks.length) {
+    notes.push(
+      `**Nothing was reviewed.** All ${chunks.length} batch(es) failed, so an absence of ` +
+        `findings below means the diff was never read — not that it is clean. ` +
+        `See the workflow log for the provider error.`,
+    );
+  } else if (failures) {
+    notes.push(`${failures} of ${chunks.length} batch(es) failed and were skipped.`);
+  }
 
   const summary =
     [summaries.join(' '), notes.join(' ')].filter(Boolean).join('\n\n') ||

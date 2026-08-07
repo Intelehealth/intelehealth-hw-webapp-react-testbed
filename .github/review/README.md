@@ -206,7 +206,7 @@ GITHUB_TOKEN=$(gh auth token) REPO=owner/name \
   node .github/review/scripts/tune-rules.mjs --days 60 --dry-run
 
 # Tests
-node --test '.github/review/scripts/test/*.test.mjs'
+node --test .github/review/scripts/test/*.test.mjs
 ```
 
 ## Deliberate limits
