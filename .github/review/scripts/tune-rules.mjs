@@ -38,7 +38,7 @@ const REPORT_PATH = process.env.REPORT_PATH || 'tuning-report.md';
 
 const REPO = process.env.REPO;
 const NOW = process.env.RUN_TIMESTAMP || new Date().toISOString();
-const MARKER = 'claude-review';
+const MARKER = 'ih-tek-review';
 const MAX_LEDGER_ENTRIES = 5000;
 
 const argv = process.argv.slice(2);

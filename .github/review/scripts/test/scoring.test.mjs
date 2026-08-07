@@ -325,7 +325,7 @@ test('an empty or missing patch yields no commentable lines', () => {
 
 test('the marker written into a comment can be parsed back out', () => {
   const body =
-    'text\n<!-- claude-review rule=SEC-001 fid=abc123 conf=0.8 score=0.56 sev=major -->';
+    'text\n<!-- ih-tek-review rule=SEC-001 fid=abc123 conf=0.8 score=0.56 sev=major -->';
   assert.deepEqual(parseMarker(body), {
     rule: 'SEC-001',
     fid: 'abc123',
@@ -336,7 +336,7 @@ test('the marker written into a comment can be parsed back out', () => {
 });
 
 test('summary markers and foreign comments are ignored', () => {
-  assert.equal(parseMarker('<!-- claude-review summary -->'), null);
+  assert.equal(parseMarker('<!-- ih-tek-review summary -->'), null);
   assert.equal(parseMarker('just a human comment'), null);
   assert.equal(parseMarker(''), null);
 });

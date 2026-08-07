@@ -1,4 +1,4 @@
-name: Claude Review Tuning
+name: IH Tek Review Tuning
 
 # Two jobs:
 #   validate — on any PR that touches the review config, prove that
@@ -79,7 +79,7 @@ jobs:
         if: steps.tune.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: chore/claude-review-tuning
+          BRANCH: chore/ih-tek-review-tuning
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CHANGE_COUNT: ${{ steps.tune.outputs.change_count }}
         run: |
@@ -95,7 +95,7 @@ jobs:
           git push --force origin "$BRANCH"
 
           # Label is optional; create it once, ignore the error if it exists.
-          gh label create claude-review-tuning \
+          gh label create ih-tek-review-tuning \
             --color BFD4F2 --description "Automated review rule weight updates" 2>/dev/null || true
 
           if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
@@ -107,5 +107,5 @@ jobs:
               --head "$BRANCH" \
               --title "chore(review): retune rule weights from PR feedback" \
               --body-file tuning-report.md \
-              --label "claude-review-tuning"
+              --label "ih-tek-review-tuning"
           fi

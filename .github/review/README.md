@@ -54,7 +54,7 @@ marker tying it back to a rule.
 Each comment ends with a hidden marker:
 
 ```html
-<!-- claude-review rule=SEC-001 fid=k3f9q2m conf=0.85 score=0.6 sev=blocker -->
+<!-- ih-tek-review rule=SEC-001 fid=k3f9q2m conf=0.85 score=0.6 sev=blocker -->
 ```
 
 Weekly, `scripts/tune-rules.mjs` walks recent PRs, finds those markers, and

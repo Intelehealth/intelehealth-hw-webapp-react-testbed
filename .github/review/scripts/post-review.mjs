@@ -32,7 +32,7 @@ import { gateFindings, SEVERITY_ORDER } from './lib/scoring.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = join(HERE, '..', 'rules.json');
 const FINDINGS_PATH = '.claude-review/findings.json';
-const MARKER = 'claude-review';
+const MARKER = 'ih-tek-review';
 
 const REPO = process.env.REPO;
 const PR_NUMBER = process.env.PR_NUMBER;
@@ -109,7 +109,7 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
   const counts = { blocker: 0, major: 0, minor: 0, nit: 0 };
   for (const f of kept) counts[f.severity]++;
 
-  const lines = ['## Automated PR review', ''];
+  const lines = ['## IH Tek review', ''];
   lines.push(summary || '_No summary was produced._', '');
 
   if (kept.length === 0) {

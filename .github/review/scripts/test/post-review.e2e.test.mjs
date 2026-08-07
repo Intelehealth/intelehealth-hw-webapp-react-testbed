@@ -122,9 +122,9 @@ test('posts one review with an inline comment on a line inside the diff', async 
     assert.equal(review.body.comments[0].side, 'RIGHT');
     assert.match(
       review.body.comments[0].body,
-      /<!-- claude-review rule=SEC-001 fid=\w+/
+      /<!-- ih-tek-review rule=SEC-001 fid=\w+/
     );
-    assert.match(review.body.body, /## Automated PR review/);
+    assert.match(review.body.body, /## IH Tek review/);
   } finally {
     stub.server.close();
   }
@@ -165,7 +165,7 @@ test('a finding already posted on an earlier run is not reposted', async () => {
     {
       id: 100,
       body:
-        'old\n<!-- claude-review rule=SEC-001 fid=' +
+        'old\n<!-- ih-tek-review rule=SEC-001 fid=' +
         (await import('../lib/scoring.mjs')).findingId(base) +
         ' -->',
     },
