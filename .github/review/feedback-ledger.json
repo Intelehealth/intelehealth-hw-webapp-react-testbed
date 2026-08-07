@@ -1,0 +1,5 @@
+{
+  "_comment": "Every review comment the tuning job has scored, keyed by GitHub comment id. This is the source of truth for rule weights - rules.json is recomputed from it on every run. Safe to edit by hand to correct a mis-scored outcome.",
+  "lastRunAt": null,
+  "entries": {}
+}

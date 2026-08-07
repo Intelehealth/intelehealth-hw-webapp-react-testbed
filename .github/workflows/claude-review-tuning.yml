@@ -1,0 +1,109 @@
+name: Claude Review Tuning
+
+# Two jobs:
+#   validate — on any PR that touches the review config, prove that
+#              review-rules.md and rules.json still agree.
+#   tune     — weekly, harvest human feedback on past review comments, rebuild
+#              the rule weights, and open a PR with the change.
+#
+# The tuning job never pushes to the default branch directly. A human always
+# sees which rules are about to be muted and why.
+
+on:
+  pull_request:
+    paths:
+      - '.github/review/**'
+      - '.github/workflows/claude-review-tuning.yml'
+  schedule:
+    # 04:00 UTC every Monday (09:30 IST).
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Lookback window in days'
+        required: false
+        default: '30'
+      dry_run:
+        description: 'Report only, do not open a PR'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check rules.json matches review-rules.md
+        run: node .github/review/scripts/sync-rules.mjs --check
+      - name: Unit tests
+        run: node --test '.github/review/scripts/test/*.test.mjs'
+
+  tune:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Harvest feedback and rebuild weights
+        id: tune
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LOOKBACK_DAYS: ${{ github.event.inputs.days || '30' }}
+          REPORT_PATH: tuning-report.md
+        run: |
+          node .github/review/scripts/tune-rules.mjs \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+
+      - name: Job summary
+        if: always()
+        run: cat tuning-report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Open tuning pull request
+        if: steps.tune.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: chore/claude-review-tuning
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHANGE_COUNT: ${{ steps.tune.outputs.change_count }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add .github/review/rules.json .github/review/feedback-ledger.json
+          git commit \
+            -m "chore(review): retune rule weights from PR feedback" \
+            -m "${CHANGE_COUNT} rule(s) changed. See the PR body for which moved and why."
+          git push --force origin "$BRANCH"
+
+          # Label is optional; create it once, ignore the error if it exists.
+          gh label create claude-review-tuning \
+            --color BFD4F2 --description "Automated review rule weight updates" 2>/dev/null || true
+
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file tuning-report.md
+            echo "Updated the existing tuning PR."
+          else
+            gh pr create \
+              --base "$DEFAULT_BRANCH" \
+              --head "$BRANCH" \
+              --title "chore(review): retune rule weights from PR feedback" \
+              --body-file tuning-report.md \
+              --label "claude-review-tuning"
+          fi
