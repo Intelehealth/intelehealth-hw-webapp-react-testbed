@@ -26,9 +26,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackHealthWorkerAction', () => {
     it('should track health worker action with proper tags and context', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackHealthWorkerAction('patient_view', {
         patientId: '123',
@@ -50,9 +49,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackPatientInteraction', () => {
     it('should track patient interaction with proper tags and context', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackPatientInteraction('consultation', 'patient_123', {
         duration: 30,
@@ -75,9 +73,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackFormSubmission', () => {
     it('should track successful form submission', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackFormSubmission('patient_registration', true, {
         patientId: '123',
@@ -97,9 +94,8 @@ describe('Sentry Utilities', () => {
     });
 
     it('should track failed form submission', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackFormSubmission('patient_registration', false, {
         patientId: '123',
@@ -121,9 +117,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackApiError', () => {
     it('should track API error with proper tags and context', async () => {
-      const { setTag, setContext, captureException } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureException } =
+        await import('../config/sentry');
       const error = new Error('API timeout');
 
       trackApiError('/api/patients', error, {
@@ -143,9 +138,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackCriticalOperation', () => {
     it('should track successful critical operation', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackCriticalOperation('patient_data_sync', 1500, true);
 
@@ -161,9 +155,8 @@ describe('Sentry Utilities', () => {
     });
 
     it('should track failed critical operation', async () => {
-      const { setTag, setContext, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureMessage } =
+        await import('../config/sentry');
 
       trackCriticalOperation('patient_data_sync', 1500, false);
 
@@ -181,9 +174,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackUserLogin', () => {
     it('should track successful user login', async () => {
-      const { setUser, setTag, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setUser, setTag, captureMessage } =
+        await import('../config/sentry');
 
       trackUserLogin('user_123', 'password', true);
 
@@ -200,9 +192,8 @@ describe('Sentry Utilities', () => {
     });
 
     it('should track failed user login', async () => {
-      const { setUser, setTag, captureMessage } = await import(
-        '../config/sentry'
-      );
+      const { setUser, setTag, captureMessage } =
+        await import('../config/sentry');
 
       trackUserLogin('user_123', 'password', false);
 
@@ -238,9 +229,8 @@ describe('Sentry Utilities', () => {
 
   describe('trackReactError', () => {
     it('should track React error with component context', async () => {
-      const { setTag, setContext, captureException } = await import(
-        '../config/sentry'
-      );
+      const { setTag, setContext, captureException } =
+        await import('../config/sentry');
       const error = new Error('Component error');
       const errorInfo = { componentStack: 'Component stack trace' };
 
