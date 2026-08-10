@@ -26,7 +26,7 @@ import {
   estimateTokens,
   extractJson,
   keyStatus,
-  listFreeModels,
+  listModels,
   MAX_FALLBACK_MODELS,
   packChunks,
   splitDiffByFile,
@@ -232,7 +232,7 @@ async function main() {
   // --- pick models --------------------------------------------------------
   let available;
   try {
-    available = await listFreeModels(API_KEY);
+    available = await listModels(API_KEY);
   } catch (err) {
     console.error(`Could not list models: ${err.message}`);
     writeFindings({
@@ -245,10 +245,10 @@ async function main() {
   }
   if (available.length === 0) {
     writeFindings({
-      summary: 'Review skipped: no free models are currently available.',
+      summary: 'Review skipped: no usable models are currently available.',
       findings: [],
       reviewed: false,
-      inconclusive: 'no free models were available',
+      inconclusive: 'no usable models were available',
     });
     return;
   }
