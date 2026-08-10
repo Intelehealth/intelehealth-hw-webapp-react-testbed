@@ -385,6 +385,12 @@ async function main() {
       `Batch ${i + 1}/${chunks.length} via ${result.model}: ` +
         `${findings.length} finding(s) kept, ${rejected.length} rejected.`
     );
+    // A rejected finding means the model DID find something and we discarded
+    // it. That is a very different problem from the model finding nothing, so
+    // say why here rather than only in an artifact.
+    for (const reason of [...new Set(rejected)].slice(0, 10)) {
+      console.log(`   rejected: ${reason}`);
+    }
     debug.push({
       batch: i + 1,
       files: chunkFiles,

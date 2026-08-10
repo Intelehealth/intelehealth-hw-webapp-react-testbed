@@ -204,6 +204,10 @@ jobs:
           path: .claude-review/
           retention-days: 14
           if-no-files-found: warn
+          # .claude-review is a dot-directory, and upload-artifact@v4 skips
+          # hidden paths by default — without this the artifact is silently
+          # empty, which is how every review so far uploaded nothing.
+          include-hidden-files: true
 
       - name: No review has been requested for this code
         if: steps.pr.outputs.mode == 'pending'
