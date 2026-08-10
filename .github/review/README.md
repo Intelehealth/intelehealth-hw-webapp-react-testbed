@@ -1,28 +1,41 @@
-# Claude PR review agent
+# IH Tek PR review agent
 
-An automated pull request reviewer that applies a written rulebook and gets
-quieter over time about the rules people keep dismissing.
+An automated pull request reviewer that applies a written rulebook, blocks the
+merge while it has findings against a PR, and gets quieter over time about the
+rules people keep dismissing.
 
 ## When it runs
 
-- A PR **into `main` or `dev`** is opened, reopened, or marked ready for review.
-  PRs targeting anything else are not reviewed.
-- Someone adds the **`review-again`** label to such a PR. The label is removed
-  again afterwards so it can be reapplied.
-- Someone with write access comments **`/review`** on it.
+**The model only runs when somebody asks for it.** Opening a PR or pushing to
+one costs nothing. Ask by adding the **`review-again`** label, or by commenting
+**`/review`**.
 
-Deliberately **not** on `synchronize`. Pushing follow-up commits to an open PR
-does not re-review it, which keeps the free tier from being spent on
-work-in-progress. The cost is real and worth stating plainly: a review goes
-stale the moment the author pushes a fix, so a PR can carry a clean review of
-code that no longer exists. Re-request it with the label or the comment when the
-diff has moved enough to matter.
+The check, however, reports on every `pull_request` event, because it is a
+required check and a required check that never reports leaves a PR unmergeable
+forever:
 
-Two caveats on the comment trigger. GitHub runs `issue_comment` workflows from
-the **default branch**, so `/review` only works once this workflow is merged to
-`main` — the label and the open/reopen triggers work from a PR branch straight
-away. And `/review` is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because
-without that gate any drive-by commenter could spend the day's request budget.
+| Event                             | Check                         | Requests |
+| --------------------------------- | ----------------------------- | -------- |
+| PR opened / reopened / ready      | 🔴 review not requested       | 0        |
+| Push to an open PR                | 🔴 code changed               | 0        |
+| `review-again` label or `/review` | 🔴 on findings, 🟢 when clean | ≤ 4      |
+| Draft, `skip-review`, other base  | 🟢 gate bypassed              | 0        |
+
+**A push always sends the check back to red.** That is the point: a review
+which passed against code you have since changed must not keep the merge
+unblocked. Ask for a fresh one after pushing.
+
+`skip-review` bypasses the gate entirely and is the deliberate escape hatch.
+
+`/review` does not review directly — it adds the label, and the `labeled` event
+does the work. GitHub associates an `issue_comment` workflow run with the
+**default branch** rather than the PR head, so a check published from one would
+never attach to the PR; routing through the label keeps a single code path with
+the correct commit association. It also means `/review` only works once this
+workflow reaches `main`, while the label works from a PR branch straight away.
+
+`/review` is restricted to `OWNER`/`MEMBER`/`COLLABORATOR`, because without
+that gate any drive-by commenter could spend the day's request budget.
 
 ## How it works
 
@@ -38,13 +51,15 @@ Once triggered, a review is three steps:
    accept, and posts one review.
 
 Step 2 is the only provider-specific part. Anything that writes
-`findings.json` in the schema below works — the shipped alternative is
-`workflows/claude-pr-review.yml`, which uses `anthropics/claude-code-action@v1`
-and can read the surrounding source rather than only the diff. Swapping
-providers does not touch the rulebook, the gating, or the feedback loop.
+`findings.json` in the schema below works, so swapping providers does not touch
+the rulebook, the gating, or the feedback loop. The upstream package also
+shipped a `claude-pr-review.yml` using `anthropics/claude-code-action@v1`, which
+can read the surrounding source rather than only the diff; it was removed here
+in favour of OpenRouter, and is worth revisiting if the diff-only limits below
+prove too costly.
 
-The split between step 2 and step 3 is the whole design. Claude decides _what_
-is wrong; the script decides _what gets said_. That keeps the comment cap, the
+The split between step 2 and step 3 is the whole design. The model decides
+_what is wrong_; the script decides _what gets said_. That keeps the comment cap, the
 confidence thresholds, and the mute list as code rather than as polite requests
 in a prompt, and it means every posted comment carries a machine-readable
 marker tying it back to a rule.
@@ -232,11 +247,40 @@ node --test .github/review/scripts/test/*.test.mjs
 
 ## Deliberate limits
 
-**It never blocks a merge.** The review posts as `COMMENT`, and
-`post-review.mjs` exits zero even when it fails. Set
-`REQUEST_CHANGES_ON_BLOCKER: "1"` in the workflow if you want blockers to
-request changes — but note that a review from `GITHUB_TOKEN` does not satisfy a
-branch protection "required approvals" rule either way.
+**It blocks the merge when it finds something — or when it could not look.**
+`post-review.mjs` exits non-zero while any finding stands, and also when the
+review did not actually complete; with branch protection requiring that check,
+the PR cannot merge. `BLOCK_MIN_SEVERITY`
+controls how severe a finding has to be to count — the default, `nit`, means
+anything at all. `BLOCK_ON_FINDINGS: '0'` makes the reviewer advisory again.
+
+Two properties of the gate are worth understanding, because they are what stop
+it becoming something people route around:
+
+- **An unread diff never reads as clean.** An empty findings array means one
+  of two very different things: the code is clean, or the model gave up. Those
+  are indistinguishable to branch protection, so the generator records whether
+  it actually engaged — batches failed, files dropped for budget, a summary
+  admitting it saw no code, or unparseable output followed by nothing — and an
+  incomplete review fails the check with a different message from a review that
+  found problems. Observed in practice: a PR here went green on
+  `No code was provided for review.` before this existed.
+  `REQUIRE_COMPLETE_REVIEW: '0'` restores the older, more forgiving behaviour.
+  The cost is that a provider outage holds merges until someone re-requests a
+  review or applies `skip-review` — an explicit, visible escape hatch rather
+  than a silent pass.
+- **The gate reasons about the code, not about the comments.** The blocking
+  decision is recomputed from every current finding, ignoring which ones earlier
+  runs already posted. Otherwise a second run on an unchanged PR would find
+  nothing "new" to say and let it through with every problem intact.
+
+Clearing a red review means pushing the fix (the check re-runs on
+`synchronize`), or re-requesting with the `review-again` label. `skip-review`
+bypasses the gate entirely and is the deliberate escape hatch.
+
+Note that a review posted by `GITHUB_TOKEN` does not satisfy a branch
+protection "required approvals" rule — the gate here is the _check_, not the
+review verdict, which is why `REQUEST_CHANGES_ON_BLOCKER` is not the mechanism.
 
 **Fork PRs on public repositories are skipped.** GitHub withholds secrets from
 those runs, so the review step cannot authenticate. This is a GitHub security

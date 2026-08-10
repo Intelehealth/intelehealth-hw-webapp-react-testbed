@@ -26,7 +26,7 @@ import {
   estimateTokens,
   extractJson,
   keyStatus,
-  listFreeModels,
+  listModels,
   MAX_FALLBACK_MODELS,
   packChunks,
   splitDiffByFile,
@@ -192,6 +192,8 @@ async function main() {
     writeFindings({
       summary: 'Review skipped: no OpenRouter API key configured.',
       findings: [],
+      reviewed: false,
+      inconclusive: 'no OpenRouter API key is configured',
     });
     return;
   }
@@ -200,6 +202,8 @@ async function main() {
     writeFindings({
       summary: 'Review skipped: no diff was produced.',
       findings: [],
+      reviewed: false,
+      inconclusive: 'the diff could not be produced',
     });
     return;
   }
@@ -209,6 +213,7 @@ async function main() {
     writeFindings({
       summary: 'No reviewable changes in this pull request.',
       findings: [],
+      reviewed: true,
     });
     return;
   }
@@ -227,19 +232,23 @@ async function main() {
   // --- pick models --------------------------------------------------------
   let available;
   try {
-    available = await listFreeModels(API_KEY);
+    available = await listModels(API_KEY);
   } catch (err) {
     console.error(`Could not list models: ${err.message}`);
     writeFindings({
       summary: `Review skipped: OpenRouter unreachable (${err.message}).`,
       findings: [],
+      reviewed: false,
+      inconclusive: `OpenRouter was unreachable (${err.message})`,
     });
     return;
   }
   if (available.length === 0) {
     writeFindings({
-      summary: 'Review skipped: no free models are currently available.',
+      summary: 'Review skipped: no usable models are currently available.',
       findings: [],
+      reviewed: false,
+      inconclusive: 'no usable models were available',
     });
     return;
   }
@@ -290,6 +299,7 @@ async function main() {
   const debug = [];
   const seen = new Set();
   let failures = 0;
+  let repaired = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
@@ -326,6 +336,7 @@ async function main() {
       console.log(
         `Batch ${i + 1}: unparseable reply from ${result.model}, retrying once.`
       );
+      repaired++;
       await sleep(REQUEST_SPACING_MS);
       try {
         const repair = await complete({
@@ -409,7 +420,39 @@ async function main() {
     [summaries.join(' '), notes.join(' ')].filter(Boolean).join('\n\n') ||
     'No reviewable findings were produced.';
 
-  writeFindings({ summary, findings: all });
+  // --- did the model actually read this diff? -----------------------------
+  //
+  // An empty findings array means one of two very different things: the code
+  // is clean, or the model gave up and said so politely. Those are
+  // indistinguishable downstream, and treating the second as a pass is how an
+  // unreviewed PR sails through a merge gate. Anything short of a complete
+  // read is reported as inconclusive rather than clean.
+  const GAVE_UP =
+    /\bno code (was )?(provided|supplied|given)|\bnothing (was )?(provided|supplied)|\bunable to review|\bcannot review|\bno (diff|changes|content) (was |were )?(provided|supplied|given)/i;
+
+  let inconclusive = null;
+  if (failures === chunks.length) {
+    inconclusive = `all ${chunks.length} batch(es) failed`;
+  } else if (failures) {
+    inconclusive = `${failures} of ${chunks.length} batch(es) failed, so part of the diff was never read`;
+  } else if (skipped.length) {
+    inconclusive = `${skipped.length} file(s) exceeded the ${MAX_REQUESTS}-request budget and were never read: ${skipped.join(', ')}`;
+  } else if (all.length === 0 && GAVE_UP.test(summaries.join(' '))) {
+    inconclusive = 'the model reported that it did not see the code';
+  } else if (all.length === 0 && repaired > 0) {
+    inconclusive = `${repaired} batch(es) returned unparseable output and then found nothing, which usually means the model did not engage with the diff`;
+  }
+
+  if (inconclusive) {
+    console.log(`Review is inconclusive: ${inconclusive}.`);
+  }
+
+  writeFindings({
+    summary,
+    findings: all,
+    reviewed: !inconclusive,
+    ...(inconclusive ? { inconclusive } : {}),
+  });
   writeFileSync(
     DEBUG_PATH,
     JSON.stringify({ chain: chain.map(m => m.id), debug }, null, 2)

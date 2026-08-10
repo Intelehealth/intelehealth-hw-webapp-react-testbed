@@ -75,20 +75,32 @@ async function runPostReview(findings, stub, env = {}) {
       typeof findings === 'string' ? findings : JSON.stringify(findings)
     );
   }
-  const { stdout, stderr } = await run(process.execPath, [SCRIPT], {
-    cwd: dir,
-    env: {
-      ...process.env,
-      GITHUB_API_URL: `http://127.0.0.1:${stub.port}`,
-      GITHUB_TOKEN: 'stub-token',
-      REPO: 'acme/app',
-      PR_NUMBER: '7',
-      HEAD_SHA: 'deadbeef',
-      ...env,
-    },
-  });
+  // execFile rejects on a non-zero exit, and a non-zero exit is now a normal
+  // outcome — it is how the merge gate reports unresolved findings. Capture the
+  // code instead of letting it throw.
+  let stdout = '';
+  let stderr = '';
+  let exitCode = 0;
+  try {
+    ({ stdout, stderr } = await run(process.execPath, [SCRIPT], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        GITHUB_API_URL: `http://127.0.0.1:${stub.port}`,
+        GITHUB_TOKEN: 'stub-token',
+        REPO: 'acme/app',
+        PR_NUMBER: '7',
+        HEAD_SHA: 'deadbeef',
+        BLOCK_ON_FINDINGS: '0',
+        ...env,
+      },
+    }));
+  } catch (err) {
+    ({ stdout = '', stderr = '' } = err);
+    exitCode = err.code ?? 1;
+  }
   await rm(dir, { recursive: true, force: true });
-  return { stdout, stderr };
+  return { stdout, stderr, exitCode };
 }
 
 const findingsPayload = findings => ({
@@ -226,6 +238,171 @@ test('invalid JSON and a missing file are both survivable', async () => {
     } finally {
       stub.server.close();
     }
+  }
+});
+
+// --- merge gate ------------------------------------------------------------
+
+test('unresolved findings fail the check so the merge is blocked', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode, stderr } = await runPostReview(
+      findingsPayload([base]),
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 1, 'a finding must fail the check');
+    assert.match(stderr, /1 unresolved finding\(s\)/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a clean PR does not block the merge', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode, stdout } = await runPostReview(
+      findingsPayload([]),
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 0);
+    assert.match(stdout, /Merge gate is clear/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('findings already posted still block on a re-run', async () => {
+  // The regression this guards: `kept` excludes anything a previous run already
+  // commented on, so gating on it would let a PR whose every problem still
+  // stands sail through the second time it is checked.
+  const existing = [
+    {
+      id: 100,
+      body:
+        'old\n<!-- ih-tek-review rule=SEC-001 fid=' +
+        (await import('../lib/scoring.mjs')).findingId(base) +
+        ' -->',
+    },
+  ];
+  const stub = await startStub({ existingComments: existing });
+  try {
+    const { exitCode, stdout } = await runPostReview(
+      findingsPayload([base]),
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.match(stdout, /No new findings since the last run/);
+    assert.equal(
+      exitCode,
+      1,
+      'the problem still exists, so it must still block'
+    );
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('BLOCK_MIN_SEVERITY lets nits through while majors still block', async () => {
+  for (const [severity, expected] of [
+    ['nit', 0],
+    ['major', 1],
+  ]) {
+    const stub = await startStub();
+    try {
+      const { exitCode } = await runPostReview(
+        findingsPayload([{ ...base, severity, confidence: 0.95 }]),
+        stub,
+        { BLOCK_ON_FINDINGS: '1', BLOCK_MIN_SEVERITY: 'major' }
+      );
+      assert.equal(exitCode, expected, `severity ${severity}`);
+    } finally {
+      stub.server.close();
+    }
+  }
+});
+
+// --- incomplete reviews ----------------------------------------------------
+
+test('a review that did not complete does not pass the gate', async () => {
+  // The hole this closes: a model that returns a well-formed empty result
+  // because it gave up looks identical to a genuinely clean review, and would
+  // otherwise unblock the merge on code nothing ever read.
+  const stub = await startStub();
+  try {
+    const { exitCode, stderr } = await runPostReview(
+      {
+        summary: 'No code was provided for review.',
+        findings: [],
+        reviewed: false,
+        inconclusive: 'the model reported that it did not see the code',
+      },
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 1, 'an unread diff must not read as clean');
+    assert.match(stderr, /did not complete/);
+    assert.match(stderr, /did not see the code/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a completed clean review still passes', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(
+      { summary: 'Looks fine.', findings: [], reviewed: true },
+      stub,
+      { BLOCK_ON_FINDINGS: '1' }
+    );
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('findings.json without the flag is treated as reviewed', async () => {
+  // Older output has no `reviewed` key. Absent must not mean "incomplete", or
+  // upgrading would retroactively block every open PR.
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(findingsPayload([]), stub, {
+      BLOCK_ON_FINDINGS: '1',
+    });
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a missing or unreadable findings.json blocks rather than passes', async () => {
+  for (const input of ['{ not json', null]) {
+    const stub = await startStub();
+    try {
+      const { exitCode, stderr } = await runPostReview(input, stub, {
+        BLOCK_ON_FINDINGS: '1',
+      });
+      assert.equal(exitCode, 1, 'no output means nothing was reviewed');
+      assert.match(stderr, /did not complete/);
+    } finally {
+      stub.server.close();
+    }
+  }
+});
+
+test('REQUIRE_COMPLETE_REVIEW=0 restores the advisory behaviour', async () => {
+  const stub = await startStub();
+  try {
+    const { exitCode } = await runPostReview(
+      { summary: 'gave up', findings: [], reviewed: false },
+      stub,
+      { BLOCK_ON_FINDINGS: '1', REQUIRE_COMPLETE_REVIEW: '0' }
+    );
+    assert.equal(exitCode, 0);
+  } finally {
+    stub.server.close();
   }
 });
 

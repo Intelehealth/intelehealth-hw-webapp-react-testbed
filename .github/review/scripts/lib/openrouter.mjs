@@ -209,11 +209,13 @@ export function rankModels(models) {
 }
 
 /**
- * Fetch the models that are currently free, best first.
+ * Fetch every model OpenRouter offers, best first, each with a `free` flag.
+ * Fetching is not the spending decision — chooseModels is.
+ *
  * @param {string} apiKey
- * @returns {Promise<Array<{id:string, context:number, structured:boolean}>>}
+ * @returns {Promise<Array<{id:string, context:number, structured:boolean, free:boolean}>>}
  */
-export async function listFreeModels(apiKey) {
+export async function listModels(apiKey) {
   const res = await fetch(`${BASE}/models`, {
     headers: { authorization: `Bearer ${apiKey}` },
   });
@@ -225,13 +227,17 @@ export async function listFreeModels(apiKey) {
 
   return rankModels(
     (data || [])
-      .filter(m => typeof m.id === 'string' && m.id.endsWith(':free'))
+      .filter(m => typeof m.id === 'string')
       .map(m => ({
         id: m.id,
         context: Number(m.context_length) || 0,
         structured: (m.supported_parameters || []).includes(
           'structured_outputs'
         ),
+        free:
+          m.id.endsWith(':free') ||
+          (Number(m.pricing?.prompt) === 0 &&
+            Number(m.pricing?.completion) === 0),
       }))
   );
 }
@@ -245,9 +251,9 @@ export const MAX_FALLBACK_MODELS = 3;
 /**
  * Choose the model chain to send.
  *
- * `preferred` wins where those models are actually available today; anything
- * still free is appended as a fallback so a retired model degrades into a
- * slightly worse review rather than a red workflow.
+ * `preferred` wins whether the model is free or paid — naming a paid model is
+ * the explicit decision to spend. Auto-filled fallbacks are free only, so a
+ * repository that pins nothing can never start billing by itself.
  *
  * @param {Array<{id:string, context:number, structured:boolean}>} available
  * @param {string[]} preferred
@@ -263,7 +269,8 @@ export function chooseModels(
   for (const id of preferred) {
     if (byId.has(id)) chain.push(byId.get(id));
   }
-  for (const m of available) {
+  // Only free models auto-fill. Paid ones must be named.
+  for (const m of available.filter(m => m.free !== false)) {
     if (chain.length >= limit) break;
     if (!chain.some(c => c.id === m.id)) chain.push(m);
   }
