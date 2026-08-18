@@ -259,6 +259,7 @@ test('ranking does not mutate the caller array', () => {
 async function startStub({ replies, models = AVAILABLE }) {
   const calls = [];
   let i = 0;
+  let keyReads = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', c => (body += c));
@@ -276,8 +277,11 @@ async function startStub({ replies, models = AVAILABLE }) {
           })),
         });
       }
+      // Usage grows on each read so the billed-delta calculation is testable.
       if (req.url.endsWith('/key'))
-        return send(200, { data: { usage: 1, limit: null } });
+        return send(200, {
+          data: { usage: 1 + keyReads++ * 0.005, limit: null },
+        });
       if (req.url.endsWith('/chat/completions')) {
         calls.push(JSON.parse(body));
         const reply = replies[Math.min(i++, replies.length - 1)];
@@ -737,6 +741,31 @@ test('the debug artifact holds the full request and response per batch', async (
       !JSON.stringify(batch.request).includes('stub-key'),
       'the API key must never reach the artifact'
     );
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the debug artifact records what the key was actually billed', async () => {
+  // Per-request cost sums miss repair calls and unsettled accounting. The
+  // key's usage delta, straight from OpenRouter, is the source of truth.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    const { debug } = await runReview(stub, { rules: RULES_FILE });
+    assert.ok(debug.account);
+    assert.equal(debug.account.billed, 0.005);
+    assert.equal(debug.account.after, 1.005);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('every request asks OpenRouter to include its accounting', async () => {
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    for (const call of stub.calls)
+      assert.deepEqual(call.usage, { include: true });
   } finally {
     stub.server.close();
   }

@@ -286,6 +286,9 @@ export async function complete(opts) {
     ],
     temperature: 0.1,
     max_tokens: maxTokens,
+    // Ask for OpenRouter's own accounting in every reply, rather than relying
+    // on the provider including it by default.
+    usage: { include: true },
   };
   if (chain.length > 1) body.models = chain;
 

@@ -558,9 +558,30 @@ async function main() {
     reviewed: !inconclusive,
     ...(inconclusive ? { inconclusive } : {}),
   });
+  /*
+   * The run's real bill, from the account itself: key usage after minus key
+   * usage before. Catches whatever per-request numbers miss (repair calls,
+   * retries billed without a usage block). May read a little low if
+   * OpenRouter's accounting has not settled by the time this runs.
+   */
+  const statusAfter = await keyStatus(API_KEY);
+  const account =
+    status && statusAfter
+      ? {
+          before: status.usage ?? null,
+          after: statusAfter.usage ?? null,
+          billed:
+            typeof statusAfter.usage === 'number' &&
+            typeof status.usage === 'number'
+              ? Number((statusAfter.usage - status.usage).toFixed(6))
+              : null,
+          limit: statusAfter.limit ?? null,
+        }
+      : null;
+
   writeFileSync(
     DEBUG_PATH,
-    JSON.stringify({ chain: chain.map(m => m.id), debug }, null, 2)
+    JSON.stringify({ chain: chain.map(m => m.id), account, debug }, null, 2)
   );
   console.log(`Wrote ${all.length} finding(s) to ${FINDINGS_PATH}.`);
 }

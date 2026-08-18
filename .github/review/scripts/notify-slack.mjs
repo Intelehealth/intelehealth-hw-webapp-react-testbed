@@ -99,6 +99,18 @@ async function main() {
     `*Tokens:* ${usage.prompt} in, ${usage.completion} out` +
       (usage.reasoning ? ` (${usage.reasoning} reasoning)` : '') +
       ` · $${usage.cost.toFixed(4)}`,
+    // What OpenRouter actually charged the key for this run, measured as the
+    // key's usage after minus before — the source of truth, not a sum of
+    // per-request numbers.
+    ...(debug?.account?.billed != null
+      ? [
+          `*OpenRouter billed:* $${debug.account.billed.toFixed(4)} this run · ` +
+            `$${debug.account.after.toFixed(4)} key total` +
+            (debug.account.limit != null
+              ? ` of $${debug.account.limit} limit`
+              : ''),
+        ]
+      : []),
   ];
 
   if (inconclusive) lines.push('', `*Why:* ${inconclusive}`);
