@@ -43,7 +43,21 @@ const DEBUG_PATH = join(OUT_DIR, 'openrouter-debug.json');
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const PR_NUMBER = process.env.PR_NUMBER || '0';
 const PR_TITLE = process.env.PR_TITLE || '';
-const PR_BODY = (process.env.PR_BODY || '').slice(0, 1500);
+
+/*
+ * The description is repeated in every batch, so template boilerplate is paid
+ * for N times over. Unfilled PR templates are mostly HTML comments and
+ * unchecked boxes — strip both before the length cap, so the cap spends its
+ * budget on whatever the author actually wrote.
+ */
+function cleanPrBody(body) {
+  return body
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^\s*-\s*\[\s?\]\s.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+const PR_BODY = cleanPrBody(process.env.PR_BODY || '').slice(0, 1500);
 const MAX_REQUESTS = Number(process.env.MAX_REQUESTS) || 4;
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS) || 4000;
 const PREFERRED = (process.env.OPENROUTER_MODELS || '')

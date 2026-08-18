@@ -132,15 +132,36 @@ async function main() {
   // Per-batch request and response previews. The user message carries the
   // rulebook digest and the diff; its head shows which files went out. Slack
   // rejects payloads past ~40k characters, so previews shrink to fit.
+  /*
+   * The payload is title → description → rules → files → DIFF, so a plain
+   * head-truncation shows boilerplate and cuts off before any code. Show the
+   * head briefly, elide the rules digest, and land on the diff itself.
+   */
+  const previewOf = req => {
+    const diffAt = req.indexOf('\nDIFF\n');
+    if (diffAt === -1) return clip(req, 700);
+    const diff = req.slice(diffAt + 6);
+    return (
+      clip(req.slice(0, Math.min(diffAt, 300)), 300) +
+      `\n⋯ rules digest elided ⋯\nDIFF (${diff.length} chars):\n` +
+      clip(diff, 900)
+    );
+  };
+
   for (const b of batches) {
     const req = b.request?.messages?.at(-1)?.content;
     const resp = b.response ?? b.unparseable;
     if (!req && !resp) continue;
     lines.push('', `*— Batch ${b.batch}* (\`${b.model || 'failed'}\`)`);
+    if (b.files?.length)
+      lines.push(
+        `*Files:* ${b.files.slice(0, 6).join(', ')}` +
+          (b.files.length > 6 ? ` +${b.files.length - 6} more` : '')
+      );
     if (req)
       lines.push(
         `*Sent* (${req.length} chars):`,
-        '```' + clip(req, 700) + '```'
+        '```' + previewOf(req) + '```'
       );
     if (resp)
       lines.push(
