@@ -28,10 +28,11 @@ import {
   getPullFiles,
   getReviewComments,
 } from './lib/github.mjs';
-import { gateFindings, SEVERITY_ORDER } from './lib/scoring.mjs';
+import { gateFindings } from './lib/gate.mjs';
+import { parseRules, SEVERITY_ORDER } from './lib/rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RULES_PATH = join(HERE, '..', 'rules.json');
+const RULES_PATH = join(HERE, '..', 'review-rules.md');
 const FINDINGS_PATH = '.claude-review/findings.json';
 const MARKER = 'ih-tek-review';
 
@@ -95,7 +96,7 @@ function validateFinding(f, i) {
   return null;
 }
 
-function commentBody(f, rule) {
+function commentBody(f) {
   const parts = [
     `**${SEVERITY_LABEL[f.severity]} · ${f.ruleId}** — ${f.title}`,
     '',
@@ -111,29 +112,21 @@ function commentBody(f, rule) {
     );
   }
 
-  const notes = [];
-  if (f._exploring) {
-    notes.push(
-      'This rule is currently muted because past comments from it were dismissed. ' +
-        'It is being re-tested on this PR — your reaction decides whether it comes back.'
-    );
-  }
-  if (rule.state === 'probation') {
-    notes.push(
-      'This rule is on probation; feedback on it is weighted heavily.'
-    );
-  }
-  if (notes.length) parts.push('', `> ${notes.join(' ')}`);
-
   parts.push(
     '',
-    '<sub>👍 if this was useful, 👎 if it was not — the reviewer tunes itself from these reactions.</sub>',
-    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} conf=${f.confidence} score=${f._score} sev=${f.severity}${f._exploring ? ' explore=1' : ''} -->`
+    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} conf=${f.confidence} sev=${f.severity} -->`
   );
   return parts.join('\n');
 }
 
-function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
+function summaryBody({
+  summary,
+  kept,
+  dropped,
+  outOfDiff,
+  invalid,
+  ruleCount,
+}) {
   const counts = { blocker: 0, major: 0, minor: 0, nit: 0 };
   for (const f of kept) counts[f.severity]++;
 
@@ -201,13 +194,9 @@ function summaryBody({ summary, kept, dropped, outOfDiff, invalid, rules }) {
     );
   }
 
-  const muted = Object.entries(rules).filter(
-    ([, r]) => r.state === 'muted'
-  ).length;
   lines.push(
     '',
-    `<sub>Rulebook v${rules._version ?? '?'} · ${Object.keys(rules).length - 1} rules · ${muted} muted. ` +
-      'See `.github/review/review-rules.md`. React 👍/👎 on any comment to tune the reviewer.</sub>',
+    `<sub>${ruleCount} rules — see \`.github/review/review-rules.md\`.</sub>`,
     `<!-- ${MARKER} summary -->`
   );
   return lines.join('\n');
@@ -244,8 +233,8 @@ async function main() {
       ? payload.inconclusive || 'the review did not complete'
       : null;
 
-  const book = JSON.parse(readFileSync(RULES_PATH, 'utf8'));
-  const rules = book.rules;
+  const rules = parseRules(readFileSync(RULES_PATH, 'utf8'));
+  const ruleCount = rules.length;
 
   // --- validate -----------------------------------------------------------
   const raw = Array.isArray(payload.findings) ? payload.findings : [];
@@ -272,10 +261,7 @@ async function main() {
   console.log(`${alreadyPosted.size} finding(s) already posted on this PR.`);
 
   // --- gate against learned weights ---------------------------------------
-  const { kept, dropped } = gateFindings(valid, rules, {
-    prNumber: PR_NUMBER,
-    maxComments: book.defaults?.maxCommentsPerPR ?? 12,
-    explorationPercent: book.defaults?.explorationPercent ?? 10,
+  const { kept, dropped } = gateFindings(valid, {
     alreadyPosted,
   });
   console.log(
@@ -287,10 +273,7 @@ async function main() {
   // every problem still stands would otherwise look clean and let the merge
   // through. The merge decision has to be about the code, not about which
   // comments happen to be new.
-  const { kept: unresolved } = gateFindings(valid, rules, {
-    prNumber: PR_NUMBER,
-    maxComments: book.defaults?.maxCommentsPerPR ?? 12,
-    explorationPercent: book.defaults?.explorationPercent ?? 10,
+  const { kept: unresolved } = gateFindings(valid, {
     alreadyPosted: new Set(),
   });
   const blocking = unresolved.filter(
@@ -315,7 +298,7 @@ async function main() {
       path: f.file,
       line: f.line,
       side: 'RIGHT',
-      body: commentBody(f, rules[f.ruleId]),
+      body: commentBody(f),
     };
     // Multi-line comments need start_line to also be in the diff.
     if (
@@ -342,7 +325,7 @@ async function main() {
     dropped,
     outOfDiff,
     invalid,
-    rules: { ...rules, _version: book.version },
+    ruleCount,
   });
 
   // Nothing new to say and nothing already said: stay quiet.
@@ -455,6 +438,9 @@ function applyMergeGate(blocking, incomplete) {
 }
 
 main().catch(err => {
+  // An API failure before the gate ran means we do not know whether this PR is
+  // clean. Exiting zero here would publish a green check on an unread review.
+  failIncomplete(`post-review failed before the gate ran (${err.message})`);
   // Log loudly, exit clean. The reviewer is advisory; it must never be the
   // reason a pull request cannot merge.
   console.error(`post-review failed: ${err.stack || err.message}`);

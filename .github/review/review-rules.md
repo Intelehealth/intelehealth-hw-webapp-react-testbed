@@ -1,16 +1,20 @@
 # PR Review Rulebook
 
-This is the instruction set the automated reviewer applies to every pull request.
-It is meant to be edited by humans. Treat it as a living document: when the bot
-misses something a human caught in review, add a rule; when a rule keeps firing
-on non-issues, the tuning job will mute it and open a PR telling you so.
+This is the instruction set the automated reviewer applies to every pull request,
+and it is the **only** configuration it has. Edit this file and the next review
+uses it — there is no generated companion file and no sync step to run.
+
+Treat it as a living document: when the reviewer misses something a human caught,
+add a rule; when a rule keeps firing on non-issues, reword it or delete it.
 
 ## How the reviewer uses this file
 
-Every finding the bot reports must cite one of the rule IDs below. That citation
-is what makes the feedback loop work — `tune-rules.mjs` groups outcomes by rule
-ID, so a rule that keeps getting dismissed can be identified and muted without
-touching the rules that are pulling their weight.
+Each rule below is sent to the model as one compact line — ID, severity, title.
+The prose under each rule is for you, not the model, so write it for whoever
+edits this file next.
+
+Every finding must cite one of these rule IDs; anything citing an ID that is not
+here is discarded before it reaches the pull request.
 
 Severities:
 
@@ -28,6 +32,21 @@ resource being protected here, not model tokens.
 
 Review only lines the PR adds or modifies. Reading surrounding code for context
 is expected; reporting pre-existing issues in untouched code is not.
+
+**These rules describe the application.** They apply to `src/**` — the React app
+and its tests. They do **not** apply to build and CI tooling: `.github/**`,
+`*.config.ts`, and scripts that run in Actions rather than in the browser.
+
+That distinction is not a loophole, it is what keeps the rules meaningful. A CI
+script's `console.log` is its only output channel, not stray debugging. A Node
+script has no `.component.ts` to be named after and no HTTP wrapper to prefer
+over `fetch`. The 200-line target describes a React component, not a build
+script. Applying `STD` to tooling would produce findings on every workflow file
+in perpetuity, and a reviewer that cries wolf gets ignored — taking the findings
+that mattered with it.
+
+`SEC` and `PHI` are the exception: a committed credential or a leaked patient
+identifier is a defect wherever it appears, tooling included.
 
 ---
 
@@ -306,6 +325,112 @@ removal is fine; an unexplained one is how a repo quietly loses its guardrails.
 
 ---
 
+## STD — Project standards
+
+These come from the conventions documented in the repository README. They are
+house style rather than defects, so most sit at `minor` — but they are the rules
+that keep a codebase readable as it grows, and a reviewer that ignores them
+leaves the whole category to chance.
+
+**STD-001 · minor · Constant defined outside a constants file.** A literal that
+is configuration rather than a one-off — an endpoint path, a storage key, a
+timeout, a limit, a feature-flag name, a route, an enum-like set of strings —
+declared inline in a component, hook, or service. Move it to the module's
+`*.constant.ts` (e.g. `auth.constant.ts`, `api.constant.ts`) and import it.
+Repeating the same literal in two places is the clearest signal it belongs there.
+
+**STD-002 · minor · Constant not named in PASCAL_SNAKE_CASE.** Exported
+constants are upper-case words joined by underscores: `MAX_RETRY_COUNT`,
+`AUTH_TOKEN_KEY`, `DEFAULT_PAGE_SIZE`. Not `maxRetryCount`, not `MaxRetryCount`,
+not `MAXRETRYCOUNT`. The name must also say what the value _is_ — `TIMEOUT_MS`
+rather than `TIMEOUT`, `PATIENT_LIST_ENDPOINT` rather than `URL2`.
+
+**STD-003 · minor · Uninformative identifier.** A variable, parameter, function,
+or type whose name does not say what it holds or does: `data`, `res`, `temp`,
+`val`, `arr`, `obj`, `flag`, `x`, `handleClick2`, or a name that describes the
+type rather than the meaning (`stringArray` instead of `visitIds`). Loop indices
+and idiomatic short names in a two-line scope are fine. Say what the value means
+in this domain, not what shape it has.
+
+**STD-004 · nit · Single-line comment where a block comment belongs.** Code
+comments use the multi-line form:
+
+```ts
+/**
+ * Explains why, not what.
+ */
+```
+
+Not `// like this`. Applies to comments explaining code; `// eslint-disable`
+directives, `// @ts-expect-error` and similar tooling pragmas are not comments in
+this sense and stay as they are.
+
+**STD-005 · minor · File naming convention not followed.** New files use the
+suffix for their kind: `.component.ts`, `.service.ts`, `.hook.ts`, `.types.ts`,
+`.reducer.ts`, `.util.ts`, `.constant.ts`, `.test.ts`. A service named
+`authHelpers.ts` or a hook named `useAuth.ts` should be `auth.service.ts` and
+`auth.hook.ts`.
+
+**STD-006 · minor · Web API used directly instead of the project's wrapper.**
+`localStorage` / `sessionStorage`, `fetch` / `XMLHttpRequest`, `document.cookie`,
+IndexedDB, `WebSocket`, the File API, Geolocation, and the Notification API all
+have project utilities or services. Call those instead — the wrappers carry the
+auth, error handling, and cleanup that direct calls skip. Name the utility that
+should have been used.
+
+**STD-007 · nit · File is growing past the size limit.** The project targets a
+maximum of 200 lines per file, preferably 150–180, with one responsibility each.
+Flag a file this PR pushes well beyond that, and say which responsibility should
+move out.
+
+**STD-008 · major · Console statement left in the code.** No `console.log` ships.
+Temporary logging for a genuinely hard bug on `dev` is allowed only when it was
+agreed in advance, and it comes out before the PR is reviewed — so by the time
+the reviewer sees it, there should be none.
+
+Flag every one, including the escapes a linter cannot catch:
+
+- a `console.log` behind `// eslint-disable-next-line no-restricted-syntax`
+- `console.debug`, `console.info`, `console.trace`, `console.table`, or
+  `console.dir` — the ESLint rule here only matches `console.log`, so these pass
+  lint and still ship
+- a `console.log` reached through an alias or a wrapper written to dodge the rule
+- logging left behind a `if (import.meta.env.DEV)` guard, unless it is deliberate
+  instrumentation the PR description explains
+
+`console.warn` and `console.error` are permitted for real error paths. Test
+files are exempt — ESLint already turns the rule off there.
+
+If a statement genuinely must stay, the PR description has to say why and who
+agreed to it; absent that, treat it as debugging that was forgotten. In this
+codebase a stray `console.log` on a patient object is also a `PHI-001` — cite
+both when the logged value could carry patient data.
+
+**STD-009 · major · Coverage bypassed with an ignore pragma.** A new
+`/* v8 ignore next */`, `/* c8 ignore next */`, `/* c8 ignore start|stop */`,
+`/* istanbul ignore next|else|file */`, or a per-file `coverage` exclusion added
+to `vitest.config.ts`. The project requires 100% branches, functions, lines and
+statements — a pragma does not meet that bar, it removes the code from the
+measurement, so the number stays at 100% while the code goes untested.
+
+Treat the pragma as the signal that the code is hard to test, and say which of
+these it is:
+
+- **Unreachable by construction** — a `default:` on an exhaustive switch, an
+  `if (!x) throw` after the type system already guarantees `x`. The honest fix
+  is usually to delete the branch, not to hide it.
+- **Hard to reach because of a seam** — an error path behind a real `fetch`, a
+  timer, a browser API. Inject the dependency or use the project's wrapper, and
+  the branch becomes reachable in a test.
+- **Genuinely untestable** — rare. Then the pragma stays, and the PR says in a
+  comment on that line why, so the next reader does not have to re-derive it.
+
+Existing pragmas are out of scope; only flag ones this PR adds. There are
+already ~40 in `src/`, so treat each new one as widening a gap rather than
+following a precedent.
+
+---
+
 ## GEN — Uncategorised
 
 **GEN-000 · minor · Issue not covered by an existing rule.** Used when the bot
@@ -317,10 +442,29 @@ GEN-000 that recurs is a rule waiting to be written.
 
 ## Editing this file
 
-Adding a rule: add the entry above, then add a matching entry to
-`.github/review/rules.json` with `state: "active"` and `weight: 0.7`. The
-`validate-rules` step in the tuning workflow fails if the two files disagree, so
-neither can drift.
+**Adding a rule:** write the entry in the right section. That is the whole
+procedure — nothing to regenerate, nothing to keep in step.
 
-Removing a rule: delete it from both files. Historical stats for that rule are
-kept in `rules.json`'s `retired` block for reference.
+```markdown
+**FE-008 · minor · Inline styles on a new component.** Style via the project's
+CSS modules instead, so theming stays in one place.
+```
+
+The shape is `**ID · severity · Title.** prose`. Severity is one of `blocker`,
+`major`, `minor`, `nit`.
+
+**Removing a rule:** delete it. Findings citing it stop being accepted from the
+next review onward.
+
+**Adding a category:** write a `## PERF — Performance` heading and put rules
+under it. Prefixes are free-form; the parser only requires `PREFIX-NNN`.
+
+Two things that bite:
+
+- **A typo in the severity silently drops the rule.** `critical` is not a
+  severity, so that line is skipped and the rule simply never fires. Run
+  `node --test .github/review/scripts/test/rules.test.mjs` after editing — it
+  asserts this file parses and every rule is usable.
+- **Severity is the lever that matters.** Every rule faces the same confidence
+  floor; severity decides what survives the comment cap and what the merge gate
+  blocks on.

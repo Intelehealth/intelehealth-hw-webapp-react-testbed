@@ -20,7 +20,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  buildRulesDigest,
   chooseModels,
   complete,
   estimateTokens,
@@ -32,10 +31,10 @@ import {
   splitDiffByFile,
   CHARS_PER_TOKEN,
 } from './lib/openrouter.mjs';
-import { isExplorationSlot } from './lib/scoring.mjs';
+import { parseRules, buildDigest } from './lib/rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RULES_PATH = join(HERE, '..', 'rules.json');
+const RULES_PATH = join(HERE, '..', 'review-rules.md');
 const OUT_DIR = '.claude-review';
 const DIFF_PATH = join(OUT_DIR, 'pr.diff');
 const FINDINGS_PATH = join(OUT_DIR, 'findings.json');
@@ -118,6 +117,69 @@ Reply with exactly this JSON shape:
 If you find nothing worth reporting, return an empty findings array. That is a perfectly good answer.`;
 }
 
+/*
+ * The shape we force the model into via `response_format: json_schema`.
+ *
+ * This is deliberately a separate, looser object from findings.schema.json.
+ * Strict mode requires every property to appear in `required` and forbids
+ * additionalProperties, so genuinely optional fields (endLine, suggestion)
+ * have to be declared nullable rather than omitted. findings.schema.json stays
+ * the stricter contract that post-review.mjs validates the written file
+ * against; this one only has to survive the provider's validator.
+ */
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'findings'],
+  properties: {
+    summary: { type: 'string' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'ruleId',
+          'file',
+          'line',
+          'endLine',
+          'severity',
+          'confidence',
+          'title',
+          'body',
+          'suggestion',
+        ],
+        properties: {
+          ruleId: { type: 'string' },
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          endLine: { type: ['integer', 'null'] },
+          severity: {
+            type: 'string',
+            enum: ['blocker', 'major', 'minor', 'nit'],
+          },
+          confidence: { type: 'number' },
+          title: { type: 'string' },
+          body: { type: 'string' },
+          suggestion: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+};
+
+/*
+ * Not every model in the chain supports structured outputs, and the ones that
+ * do not are free to invent key names. Accept the spellings they actually
+ * reach for so a good finding is not discarded over casing.
+ */
+function pick(obj, ...names) {
+  for (const n of names) {
+    if (obj[n] !== undefined && obj[n] !== null) return obj[n];
+  }
+  return undefined;
+}
+
 /** Keep only findings that name a file we actually sent and a rule that exists. */
 function sanitise(findings, chunkFiles, validRuleIds) {
   const fileSet = new Set(chunkFiles);
@@ -127,22 +189,33 @@ function sanitise(findings, chunkFiles, validRuleIds) {
   for (const f of Array.isArray(findings) ? findings : []) {
     if (!f || typeof f !== 'object') continue;
 
-    const ruleId = String(f.ruleId || '')
+    const rawRuleId = pick(f, 'ruleId', 'rule_id', 'ruleID', 'rule', 'id');
+    const file = pick(f, 'file', 'path', 'filename', 'file_path');
+    const ruleId = String(rawRuleId || '')
       .toUpperCase()
       .trim();
-    const line = Number.parseInt(f.line, 10);
-    const endLine = Number.parseInt(f.endLine, 10);
-    const severity = String(f.severity || '')
+    const line = Number.parseInt(
+      pick(f, 'line', 'line_number', 'lineNumber'),
+      10
+    );
+    const endLine = Number.parseInt(pick(f, 'endLine', 'end_line'), 10);
+    const severity = String(pick(f, 'severity', 'level') || '')
       .toLowerCase()
       .trim();
-    const confidence = Number(f.confidence);
+    const confidence = Number(pick(f, 'confidence', 'score'));
 
-    if (!validRuleIds.has(ruleId)) {
-      rejected.push(`invented rule id ${f.ruleId}`);
+    if (!ruleId) {
+      rejected.push(
+        `missing rule id (model returned keys: ${Object.keys(f).join(', ') || 'none'})`
+      );
       continue;
     }
-    if (!fileSet.has(f.file)) {
-      rejected.push(`file not in this batch: ${f.file}`);
+    if (!validRuleIds.has(ruleId)) {
+      rejected.push(`invented rule id ${ruleId}`);
+      continue;
+    }
+    if (!fileSet.has(file)) {
+      rejected.push(`file not in this batch: ${file}`);
       continue;
     }
     if (!Number.isInteger(line) || line < 1) {
@@ -157,20 +230,22 @@ function sanitise(findings, chunkFiles, validRuleIds) {
       rejected.push(`confidence below threshold on ${ruleId}`);
       continue;
     }
-    if (!f.title || !f.body) {
+    const title = pick(f, 'title', 'summary', 'message');
+    const body = pick(f, 'body', 'description', 'detail', 'explanation');
+    if (!title || !body) {
       rejected.push(`missing title or body on ${ruleId}`);
       continue;
     }
 
     out.push({
       ruleId,
-      file: f.file,
+      file,
       line,
       ...(Number.isInteger(endLine) && endLine >= line ? { endLine } : {}),
       severity,
       confidence: Math.min(1, Math.max(0, confidence)),
-      title: String(f.title).slice(0, 120),
-      body: String(f.body).slice(0, 4000),
+      title: String(title).slice(0, 120),
+      body: String(body).slice(0, 4000),
       ...(f.suggestion
         ? { suggestion: String(f.suggestion).slice(0, 2000) }
         : {}),
@@ -218,16 +293,19 @@ async function main() {
     return;
   }
 
-  const book = JSON.parse(readFileSync(RULES_PATH, 'utf8'));
-  const explorationPercent = book.defaults?.explorationPercent ?? 10;
-  const { digest, included, exploring } = buildRulesDigest(book.rules, ruleId =>
-    isExplorationSlot(ruleId, PR_NUMBER, explorationPercent)
-  );
-  const validRuleIds = new Set(included);
-  console.log(
-    `Rulebook v${book.version}: ${included.length} rule(s) in play` +
-      (exploring.length ? `, re-testing muted ${exploring.join(', ')}` : '')
-  );
+  const rules = parseRules(readFileSync(RULES_PATH, 'utf8'));
+  if (rules.length === 0) {
+    writeFindings({
+      summary: 'Review skipped: review-rules.md contains no rules.',
+      findings: [],
+      reviewed: false,
+      inconclusive: 'the rulebook is empty or unparseable',
+    });
+    return;
+  }
+  const digest = buildDigest(rules);
+  const validRuleIds = new Set(rules.map(r => r.id));
+  console.log(`Rulebook: ${rules.length} rule(s) from review-rules.md`);
 
   // --- pick models --------------------------------------------------------
   let available;
@@ -320,6 +398,7 @@ async function main() {
         }),
         maxTokens: MAX_OUTPUT_TOKENS,
         jsonMode,
+        schema: RESPONSE_SCHEMA,
         title: `PR Review #${PR_NUMBER}`,
       });
     } catch (err) {
@@ -385,6 +464,12 @@ async function main() {
       `Batch ${i + 1}/${chunks.length} via ${result.model}: ` +
         `${findings.length} finding(s) kept, ${rejected.length} rejected.`
     );
+    // A rejected finding means the model DID find something and we discarded it
+    // — a very different problem from the model finding nothing. Say why here
+    // rather than only in an artifact.
+    for (const reason of [...new Set(rejected)].slice(0, 10)) {
+      console.log(`   rejected: ${reason}`);
+    }
     debug.push({
       batch: i + 1,
       files: chunkFiles,
@@ -463,7 +548,12 @@ async function main() {
 main().catch(err => {
   console.error(`openrouter-review failed: ${err.stack || err.message}`);
   try {
-    writeFindings({ summary: `Review failed: ${err.message}`, findings: [] });
+    writeFindings({
+      summary: `Review failed: ${err.message}`,
+      findings: [],
+      reviewed: false,
+      inconclusive: `the review crashed (${err.message})`,
+    });
   } catch {
     /* nothing more we can do */
   }

@@ -2,27 +2,28 @@ name: PR Review
 
 # Automated PR review using OpenRouter free models.
 #
-# The model only runs when somebody asks for it — by adding the `review-again`
-# label, or by commenting `/review`. Opening a PR or pushing to one costs
-# nothing.
+# A pull request is reviewed automatically when it is opened. Pushing to it does
+# not re-review — that only marks the existing review stale; add the
+# `review-again` label when you want a fresh one.
 #
 # But the check still reports on every pull_request event, because it is a
 # REQUIRED check and a required check that never reports leaves a PR
 # unmergeable forever. So:
 #
-#   PR opened / reopened / ready   -> check RED  "review not requested"   0 requests
-#   push to an open PR             -> check RED  "code changed"           0 requests
-#   `review-again` label / /review -> full review, RED on findings        <=4 requests
+#   PR opened / reopened / ready   -> full review, RED on findings        <=4 requests
 #                                     or GREEN when clean
+#   push to an open PR             -> check RED  "review is stale"        0 requests
+#   `review-again` label           -> re-review                           <=4 requests
 #   draft / skip-review / other base -> check GREEN, gate bypassed        0 requests
 #
 # A push always sends the check back to red. That is the point: a review that
 # passed against code which has since changed must not keep a merge unblocked.
 #
-# `/review` does not review directly — it adds the label. GitHub associates an
-# issue_comment workflow run with the default branch rather than the PR head, so
-# a check published from one would never attach to the PR. Going through the
-# label keeps a single code path with the correct commit association.
+# There is deliberately no `/review` comment trigger. A comment handler can only
+# request a review by applying the label, and GitHub does not start workflow
+# runs from events created by GITHUB_TOKEN — so the `labeled` event never fires
+# and the comment silently does nothing. Enabling it needs a PAT or GitHub App
+# token; the label works today and needs neither.
 
 on:
   pull_request:
@@ -30,45 +31,15 @@ on:
     # Base branch, i.e. what the PR merges INTO. PRs targeting anything else
     # (qa, staging, feature branches) are not reviewed and are not gated.
     branches: [main, dev]
-  issue_comment:
-    types: [created]
 
 concurrency:
   group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
-  # `/review` on a pull request just applies the label. The labeled event then
-  # does the real work below.
-  request:
-    if: >
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request != null &&
-      startsWith(github.event.comment.body, '/review') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write
-      issues: write
-    steps:
-      - name: Request a review
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.issue.number }}
-        run: |
-          set -euo pipefail
-          gh api -X POST \
-            "repos/${REPO}/issues/comments/${{ github.event.comment.id }}/reactions" \
-            -f content=eyes --silent || true
-          gh issue edit "$NUMBER" --repo "$REPO" --add-label review-again
-          echo "Requested a review on #${NUMBER} via the review-again label."
-
   review:
     # Every pull_request event runs this job, including the ones that do no
     # work. A required check must always report, or the PR can never merge.
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -102,8 +73,14 @@ jobs:
             echo "mode=bypass" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # --- review: somebody asked for one ----------------------------------
-          if [ "$ACTION" = "labeled" ] && [ "$LABEL_NAME" = "review-again" ]; then
+          # --- review: opened by default, or somebody asked again --------------
+          #
+          # A PR is reviewed on sight. `review-again` re-reviews after a push,
+          # since `synchronize` deliberately does not spend a review on every
+          # commit — it only sends the check back to red.
+          if [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ] \
+             || [ "$ACTION" = "ready_for_review" ] \
+             || { [ "$ACTION" = "labeled" ] && [ "$LABEL_NAME" = "review-again" ]; }; then
             {
               echo "mode=review"
               echo "number=${NUMBER}"
@@ -166,8 +143,14 @@ jobs:
           # attacker-controlled text and must never reach a `run:` block inline.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          MAX_REQUESTS: '4'
-        run: node .github/review/scripts/openrouter-review.mjs
+          # ~3% of merged PRs exceed 4 requests (measured across 40 on the
+          # sibling repo: median 28KB / 1 batch, but one needed 5). Files beyond
+          # the cap are dropped and the review reports inconclusive.
+          MAX_REQUESTS: '6'
+          # Reasoning is switched off at the request (see lib/openrouter.mjs),
+          # so this budget is the reply alone.
+          MAX_OUTPUT_TOKENS: '8000'
+        run: node .github/review/scripts/review.mjs
 
       - name: Post review
         if: steps.pr.outputs.mode == 'review'
@@ -180,7 +163,12 @@ jobs:
           # Unresolved findings fail this step, which fails the check, which
           # blocks the merge. Only findings do this — every reviewer failure
           # path still exits zero, so a provider outage cannot wedge merges.
-          BLOCK_ON_FINDINGS: '1'
+          # ENFORCEMENT SWITCH — owner-controlled, repo variable REVIEW_ENFORCE.
+          # Unset or anything but 'true' = advisory: the review still runs and
+          # still comments, it just never fails the check. Set REVIEW_ENFORCE to
+          # 'true' when the rulebook has earned the right to block merges.
+          BLOCK_ON_FINDINGS: ${{ vars.REVIEW_ENFORCE == 'true' && '1' || '0' }}
+          REQUIRE_COMPLETE_REVIEW: ${{ vars.REVIEW_ENFORCE == 'true' && '1' || '0' }}
           # Least severe finding that still blocks: blocker | major | minor | nit
           BLOCK_MIN_SEVERITY: 'nit'
         run: node .github/review/scripts/post-review.mjs
@@ -204,23 +192,28 @@ jobs:
           path: .claude-review/
           retention-days: 14
           if-no-files-found: warn
+          # .claude-review is a dot-directory and upload-artifact@v4 skips hidden
+          # paths by default — without this the artifact is silently empty.
+          include-hidden-files: true
 
       - name: No review has been requested for this code
         if: steps.pr.outputs.mode == 'pending'
+        env:
+          ENFORCE: ${{ vars.REVIEW_ENFORCE == 'true' && '1' || '0' }}
         run: |
-          echo "::error title=Review not requested::This pull request has not been reviewed at its current commit."
+          if [ "$ENFORCE" != "1" ]; then
+            echo "::notice title=Review is stale::Advisory mode — add the \`review-again\` label for a fresh review. Not blocking."
+            exit 0
+          fi
+          echo "::error title=Review is stale::This pull request has changed since it was last reviewed."
           cat <<'MSG'
-          The automated review has not run against this code.
+          The code has changed since the last review, so the previous result no
+          longer applies.
 
-          Ask for one, and this check turns green if it comes back clean:
-
-            * add the `review-again` label, or
-            * comment `/review`
+          Add the `review-again` label for a fresh review.
 
           Pushing new commits sends this check back to red on purpose — a review
           that passed against code you have since changed should not keep the
           merge unblocked.
-
-          To merge without a review, add the `skip-review` label.
           MSG
           exit 1

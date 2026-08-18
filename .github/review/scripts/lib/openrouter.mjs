@@ -156,46 +156,11 @@ export function extractJson(text) {
 }
 
 /**
- * Compact one-line-per-rule digest for the prompt.
- *
- * The full rulebook is ~14 KB of prose. Sending it on every request would eat
- * the context budget a free model needs for the actual diff, so the model gets
- * IDs, severities and titles, and the prose stays as documentation for humans.
- *
- * Muted rules are omitted entirely — that is how the feedback loop's mute
- * decision reaches the model. On an exploration slot a muted rule is put back,
- * so it can still earn its way out of the mute.
- *
- * @param {Record<string, {title:string, severity:string, state:string}>} rules
- * @param {(ruleId:string)=>boolean} isExploring
- * @returns {{digest:string, included:string[], exploring:string[]}}
- */
-export function buildRulesDigest(rules, isExploring = () => false) {
-  const lines = [];
-  const included = [];
-  const exploring = [];
-
-  for (const [id, rule] of Object.entries(rules)) {
-    if (rule.state === 'muted') {
-      if (!isExploring(id)) continue;
-      exploring.push(id);
-    }
-    const note =
-      rule.state === 'probation'
-        ? ' (only report at blocker/major severity)'
-        : '';
-    lines.push(`${id} [${rule.severity}] ${rule.title}${note}`);
-    included.push(id);
-  }
-
-  return { digest: lines.join('\n'), included, exploring };
-}
-
-/**
  * Rank candidate models best-first: structured-output support, then context.
  *
- * The whole pipeline depends on the reply parsing as strict JSON, and most free
- * models cannot guarantee that. Ranking on context alone puts a large-context
+ * Structured output first, then non-reasoning, then context. The pipeline needs
+ * strict JSON in a bounded reply; a reasoning model can spend the whole output
+ * budget thinking and return a truncated fragment. Ranking on context alone puts a large-context
  * model that rambles ahead of a smaller one that answers in the required shape,
  * and the rambling one then wins the chain and returns nothing usable.
  *
@@ -204,7 +169,9 @@ export function buildRulesDigest(rules, isExploring = () => false) {
 export function rankModels(models) {
   return [...models].sort(
     (a, b) =>
-      Number(b.structured) - Number(a.structured) || b.context - a.context
+      Number(b.structured) - Number(a.structured) ||
+      Number(a.reasoning) - Number(b.reasoning) ||
+      b.context - a.context
   );
 }
 
@@ -234,6 +201,10 @@ export async function listModels(apiKey) {
         structured: (m.supported_parameters || []).includes(
           'structured_outputs'
         ),
+        // Reasoning models spend the output budget thinking before replying, so
+        // they need far more headroom for the same answer. Rank them below an
+        // equally capable non-reasoning model rather than excluding them.
+        reasoning: (m.supported_parameters || []).includes('reasoning'),
         free:
           m.id.endsWith(':free') ||
           (Number(m.pricing?.prompt) === 0 &&
@@ -285,7 +256,8 @@ export function chooseModels(
  * hit. Retries here are only for transport-level problems.
  *
  * @param {{apiKey:string, models:string[], system:string, user:string,
- *          maxTokens?:number, jsonMode?:boolean, retries?:number,
+ *          maxTokens?:number, jsonMode?:boolean, schema?:object|null,
+ *          disableReasoning?:boolean, retries?:number,
  *          referer?:string, title?:string}} opts
  * @returns {Promise<{text:string, model:string, usage:object|null}>}
  */
@@ -297,6 +269,8 @@ export async function complete(opts) {
     user,
     maxTokens = 4000,
     jsonMode = false,
+    schema = null,
+    disableReasoning = true,
     retries = 2,
     referer = 'https://github.com',
     title = 'PR Review Agent',
@@ -314,7 +288,32 @@ export async function complete(opts) {
     max_tokens: maxTokens,
   };
   if (chain.length > 1) body.models = chain;
-  if (jsonMode) body.response_format = { type: 'json_object' };
+  /*
+   * `json_object` guarantees syntactically valid JSON and nothing else — the
+   * model is free to name the keys whatever it likes. Observed in production:
+   * a reply keyed `rule_id` instead of `ruleId` parsed cleanly, then every
+   * finding was thrown away as "invented rule id undefined". `json_schema`
+   * with strict:true is what actually pins the field names down.
+   */
+  if (schema && jsonMode) {
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: { name: 'review_findings', strict: true, schema },
+    };
+  } else if (jsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
+
+  /*
+   * Reading a diff and emitting findings against a fixed rulebook is
+   * pattern-matching, not multi-step deduction — there is nothing here for a
+   * chain of thought to work out. Left on, a reasoning model spends the whole
+   * output budget thinking and returns a truncated fragment: deepseek-v4-pro
+   * burned 4000 of 4001 completion tokens and replied "No diff was provided
+   * for review." OpenRouter normalises this across providers and ignores it on
+   * models that cannot reason, so it is safe to send unconditionally.
+   */
+  if (disableReasoning) body.reasoning = { enabled: false };
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -337,6 +336,10 @@ export async function complete(opts) {
         lastErr = new Error(
           `POST /chat/completions -> ${res.status}: ${text.slice(0, 400)}`
         );
+        // A 401/402/400 will never succeed on a retry, and retrying it burns
+        // requests against a daily cap. Mark it so the catch below rethrows
+        // instead of sleeping and trying the same doomed request again.
+        if (!retryable) lastErr.fatal = true;
         if (!retryable || attempt === retries) throw lastErr;
         const wait =
           Number(res.headers.get('retry-after')) * 1000 || 2 ** attempt * 4000;
@@ -357,7 +360,9 @@ export async function complete(opts) {
       };
     } catch (err) {
       lastErr = err;
-      if (attempt === retries) throw lastErr;
+      // The non-retryable throw above lands here too, so honour it — otherwise
+      // every 4xx is retried the full count before failing identically.
+      if (err.fatal || attempt === retries) throw lastErr;
       await new Promise(r => setTimeout(r, 2 ** attempt * 2000));
     }
   }

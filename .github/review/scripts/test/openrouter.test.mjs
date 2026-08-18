@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  buildRulesDigest,
   chooseModels,
   extractJson,
   packChunks,
@@ -28,7 +27,7 @@ import {
 
 const run = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPT = join(HERE, '..', 'openrouter-review.mjs');
+const SCRIPT = join(HERE, '..', 'review.mjs');
 
 // --- diff splitting --------------------------------------------------------
 
@@ -186,41 +185,14 @@ test('returns null rather than guessing on unusable output', () => {
   );
 });
 
-// --- rules digest ----------------------------------------------------------
-
-const RULES = {
-  'SEC-001': { title: 'Injection', severity: 'blocker', state: 'active' },
-  'FE-005': { title: 'Index key', severity: 'minor', state: 'probation' },
-  'TS-004': { title: 'Dead code', severity: 'minor', state: 'muted' },
-};
-
-test('the digest omits muted rules, so the model cannot report them', () => {
-  const { digest, included } = buildRulesDigest(RULES, () => false);
-  assert.ok(!digest.includes('TS-004'));
-  assert.deepEqual(included, ['SEC-001', 'FE-005']);
-});
-
-test('probation rules are included with their severity restriction', () => {
-  const { digest } = buildRulesDigest(RULES, () => false);
-  assert.match(
-    digest,
-    /FE-005 \[minor\] Index key \(only report at blocker\/major severity\)/
-  );
-});
-
-test('an exploration slot puts a muted rule back in play', () => {
-  const { digest, exploring } = buildRulesDigest(RULES, id => id === 'TS-004');
-  assert.match(digest, /TS-004/);
-  assert.deepEqual(exploring, ['TS-004']);
-});
-
-test('the digest stays small enough to leave context for the diff', () => {
-  const { digest } = buildRulesDigest(RULES, () => false);
-  assert.ok(digest.length < 500);
-  assert.equal(digest.split('\n').length, 2, 'one line per rule');
-});
-
 // --- model selection -------------------------------------------------------
+
+/* The chain configured in production, so the tests exercise what actually runs. */
+const LIVE_CHAIN = [
+  { id: 'deepseek/deepseek-v4-pro', context: 204800, structured: true },
+  { id: 'qwen/qwen3-coder', context: 262144, structured: true },
+  { id: 'z-ai/glm-4.7', context: 204800, structured: true },
+];
 
 const AVAILABLE = [
   { id: 'big/model:free', context: 262144, structured: false },
@@ -329,26 +301,26 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
   await mkdir(join(dir, '.claude-review'), { recursive: true });
   await writeFile(join(dir, '.claude-review', 'pr.diff'), diff);
 
-  // The script reads rules.json relative to itself, so point it at a copy only
-  // when the test needs different rules.
+  // The script reads review-rules.md relative to itself, so point it at a copy
+  // only when the test needs different rules.
   let scriptPath = SCRIPT;
   if (rules) {
     const reviewDir = join(dir, 'review');
     await mkdir(join(reviewDir, 'scripts', 'lib'), { recursive: true });
-    await writeFile(join(reviewDir, 'rules.json'), JSON.stringify(rules));
-    for (const f of ['openrouter-review.mjs']) {
+    await writeFile(join(reviewDir, 'review-rules.md'), rules);
+    for (const f of ['review.mjs']) {
       await writeFile(
         join(reviewDir, 'scripts', f),
         await readFile(join(HERE, '..', f))
       );
     }
-    for (const f of ['openrouter.mjs', 'scoring.mjs']) {
+    for (const f of ['openrouter.mjs', 'rules.mjs', 'gate.mjs']) {
       await writeFile(
         join(reviewDir, 'scripts', 'lib', f),
         await readFile(join(HERE, '..', 'lib', f))
       );
     }
-    scriptPath = join(reviewDir, 'scripts', 'openrouter-review.mjs');
+    scriptPath = join(reviewDir, 'scripts', 'review.mjs');
   }
 
   const { stdout, stderr } = await run(process.execPath, [scriptPath], {
@@ -368,19 +340,10 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
   return { stdout, stderr, findings };
 }
 
-const RULES_FILE = {
-  version: 1,
-  defaults: { explorationPercent: 0 },
-  rules: {
-    'SEC-001': {
-      title: 'Injection',
-      severity: 'blocker',
-      state: 'active',
-      weight: 0.7,
-      stats: {},
-    },
-  },
-};
+const RULES_FILE = `# Rulebook
+
+**SEC-001 · blocker · Injection.** String concatenation building SQL.
+`;
 
 const goodFinding = {
   ruleId: 'SEC-001',
@@ -581,10 +544,95 @@ test('JSON mode is only requested when every model in the chain supports it', as
   });
   try {
     await runReview(allStructured, { rules: RULES_FILE });
-    assert.deepEqual(allStructured.calls[0].response_format, {
-      type: 'json_object',
-    });
+    assert.equal(
+      allStructured.calls[0].response_format.type,
+      'json_schema',
+      'a fully structured chain gets the strict schema, not bare json_object'
+    );
   } finally {
     allStructured.server.close();
+  }
+});
+
+test('a non-reasoning model outranks a reasoning one at equal capability', () => {
+  // The regression this locks in: deepseek-v4-pro spent 4000 of 4001 completion
+  // tokens reasoning and replied "No diff was provided for review."
+  const ranked = rankModels([
+    { id: 'thinker:v1', context: 1000000, structured: true, reasoning: true },
+    { id: 'answerer:v1', context: 262144, structured: true, reasoning: false },
+  ]);
+  assert.equal(ranked[0].id, 'answerer:v1');
+});
+
+test('structured output still outranks non-reasoning', () => {
+  const ranked = rankModels([
+    { id: 'plain:v1', context: 262144, structured: false, reasoning: false },
+    { id: 'thinker:v1', context: 262144, structured: true, reasoning: true },
+  ]);
+  assert.equal(
+    ranked[0].id,
+    'thinker:v1',
+    'JSON support is the harder constraint'
+  );
+});
+
+test('pins the reply shape with a strict json_schema, not bare json_object', async () => {
+  // Regression: `json_object` only guarantees valid JSON, not field names. A
+  // model replied with `rule_id` instead of `ruleId` and all five findings were
+  // discarded as "invented rule id undefined".
+  const stub = await startStub({
+    replies: [{ content: OBJ }],
+    models: LIVE_CHAIN,
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    const [call] = stub.calls;
+    assert.equal(call.response_format.type, 'json_schema');
+    assert.equal(call.response_format.json_schema.strict, true);
+    const props = call.response_format.json_schema.schema.properties;
+    assert.ok(props.findings.items.required.includes('ruleId'));
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('every request asks the provider not to reason', async () => {
+  // deepseek-v4-pro spent 4000 of 4001 completion tokens reasoning and returned
+  // the single line "No diff was provided for review." — the diff had been sent
+  // (prompt_tokens 1978), the reply was simply truncated away.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    assert.ok(stub.calls.length > 0);
+    for (const call of stub.calls)
+      assert.deepEqual(call.reasoning, { enabled: false });
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a finding keyed rule_id survives instead of being thrown away', async () => {
+  const snake = JSON.stringify({
+    summary: 'x',
+    findings: [
+      {
+        rule_id: 'SEC-001',
+        path: 'src/a.ts',
+        line_number: 2,
+        level: 'major',
+        score: 0.9,
+        message: 'hardcoded secret',
+        description: 'move it to an env var',
+      },
+    ],
+  });
+  const stub = await startStub({ replies: [{ content: snake }] });
+  try {
+    const { findings } = await runReview(stub, { rules: RULES_FILE });
+    assert.equal(findings.findings.length, 1);
+    assert.equal(findings.findings[0].ruleId, 'SEC-001');
+    assert.equal(findings.findings[0].file, 'src/a.ts');
+  } finally {
+    stub.server.close();
   }
 });
