@@ -704,3 +704,16 @@ test('the model is no longer asked for suggestion blocks', async () => {
     stub.server.close();
   }
 });
+
+test('requests route to the cheapest provider', async () => {
+  // Two identical runs billed ~70% apart per token — same model id, different
+  // provider behind it. Input is ~99% of this workload's tokens.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    for (const call of stub.calls)
+      assert.deepEqual(call.provider, { sort: 'price' });
+  } finally {
+    stub.server.close();
+  }
+});

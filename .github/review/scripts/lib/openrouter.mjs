@@ -288,6 +288,14 @@ export async function complete(opts) {
     max_tokens: maxTokens,
   };
   if (chain.length > 1) body.models = chain;
+
+  /*
+   * One model id is served by several providers at different prices, and the
+   * default routing balances price against uptime. Two identical runs came
+   * back ~70% apart per token because of it. Input tokens are ~99% of this
+   * workload, so the provider's rate is effectively the whole bill.
+   */
+  body.provider = { sort: 'price' };
   /*
    * `json_object` guarantees syntactically valid JSON and nothing else — the
    * model is free to name the keys whatever it likes. Observed in production:
