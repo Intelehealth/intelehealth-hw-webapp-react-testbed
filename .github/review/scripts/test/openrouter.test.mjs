@@ -336,8 +336,13 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
   const findings = JSON.parse(
     await readFile(join(dir, '.claude-review', 'findings.json'), 'utf8')
   );
+  // Early exits (no API key) legitimately write findings without a debug file.
+  const debug = await readFile(
+    join(dir, '.claude-review', 'openrouter-debug.json'),
+    'utf8'
+  ).then(JSON.parse, () => null);
   await rm(dir, { recursive: true, force: true });
-  return { stdout, stderr, findings };
+  return { stdout, stderr, findings, debug };
 }
 
 const RULES_FILE = `# Rulebook
@@ -713,6 +718,25 @@ test('requests route to the cheapest provider', async () => {
     await runReview(stub, { rules: RULES_FILE });
     for (const call of stub.calls)
       assert.deepEqual(call.provider, { sort: 'price' });
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the debug artifact holds the full request and response per batch', async () => {
+  // The Slack digest shows truncated previews; the artifact is the full
+  // fidelity copy. Without it, debugging a bad reply means re-running the PR.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    const { debug } = await runReview(stub, { rules: RULES_FILE });
+    const [batch] = debug.debug;
+    assert.ok(batch.request.messages.length >= 2);
+    assert.match(batch.request.messages.at(-1).content, /DIFF/);
+    assert.equal(batch.response, OBJ);
+    assert.ok(
+      !JSON.stringify(batch.request).includes('stub-key'),
+      'the API key must never reach the artifact'
+    );
   } finally {
     stub.server.close();
   }

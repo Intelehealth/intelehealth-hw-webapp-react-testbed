@@ -365,9 +365,13 @@ export async function complete(opts) {
         text: json.choices?.[0]?.message?.content ?? '',
         model: json.model || chain[0],
         usage: json.usage || null,
+        // The exact body sent, for the debug artifact. The API key travels in
+        // a header, never in the body, so this is safe to persist.
+        request: body,
       };
     } catch (err) {
       lastErr = err;
+      lastErr.request = body;
       // The non-retryable throw above lands here too, so honour it — otherwise
       // every 4xx is retried the full count before failing identically.
       if (err.fatal || attempt === retries) throw lastErr;

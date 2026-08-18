@@ -2,11 +2,12 @@
 /**
  * Posts a digest of one review run to Slack, for debugging.
  *
- * Deliberately sends metadata and counts, never the diff or the model's raw
- * reply. The diff is source code and this is a clinical codebase; a webhook URL
- * is a bearer credential with no scoping, so anything sent here should be
- * assumed readable by anyone who ever sees that URL. The run artifact already
- * holds the full request and response for whoever needs them.
+ * Includes truncated previews of what was sent to and returned by the model.
+ * The payload contains the diff — source code of a clinical codebase — and a
+ * webhook URL is a bearer credential with no scoping, so this must only ever
+ * point at a private channel. Full, untruncated copies of every request and
+ * response live in the run artifact (openrouter-debug.json); the previews
+ * exist so most debugging never needs the download.
  *
  * Never exits non-zero. A failed notification must not fail a review.
  */
@@ -17,6 +18,7 @@ const WEBHOOK = process.env.SLACK_WEBHOOK_URL;
 const REPO = process.env.REPO || '';
 const PR_NUMBER = process.env.PR_NUMBER || '';
 const RUN_ID = process.env.RUN_ID || '';
+const PR_AUTHOR = process.env.PR_AUTHOR || '';
 const SERVER = process.env.GITHUB_SERVER_URL || 'https://github.com';
 
 const DEBUG_PATH = '.claude-review/openrouter-debug.json';
@@ -69,12 +71,18 @@ async function main() {
       ? `🟠 ${kept} finding(s)`
       : '🟢 clean';
 
+  const clip = (text, max) =>
+    text.length > max
+      ? `${text.slice(0, max)}\n… ${text.length - max} more chars, full copy in the artifact`
+      : text;
+
   const prUrl = `${SERVER}/${REPO}/pull/${PR_NUMBER}`;
   const runUrl = `${SERVER}/${REPO}/actions/runs/${RUN_ID}`;
 
   const lines = [
     `*Review ${status}* — <${prUrl}|${REPO}#${PR_NUMBER}>`,
     '',
+    ...(PR_AUTHOR ? [`*Raised by:* \`${PR_AUTHOR}\``] : []),
     `*Chain:* \`${(debug?.chain ?? []).join(' → ') || 'unknown'}\``,
     `*Served by:* \`${served.join(', ') || 'nothing'}\``,
     `*Batches:* ${batches.length}` +
@@ -102,7 +110,33 @@ async function main() {
   if (errors.length)
     lines.push('', '*Errors:*', ...errors.map(e => `• \`${e}\``));
 
+  // Per-batch request and response previews. The user message carries the
+  // rulebook digest and the diff; its head shows which files went out. Slack
+  // rejects payloads past ~40k characters, so previews shrink to fit.
+  for (const b of batches) {
+    const req = b.request?.messages?.at(-1)?.content;
+    const resp = b.response ?? b.unparseable;
+    if (!req && !resp) continue;
+    lines.push('', `*— Batch ${b.batch}* (\`${b.model || 'failed'}\`)`);
+    if (req)
+      lines.push(
+        `*Sent* (${req.length} chars):`,
+        '```' + clip(req, 700) + '```'
+      );
+    if (resp)
+      lines.push(
+        `*Received* (${resp.length} chars):`,
+        '```' + clip(resp, 1200) + '```'
+      );
+  }
+
   lines.push('', `<${runUrl}|Run log and artifact>`);
+
+  // Hard ceiling: drop preview lines from the end until the payload fits,
+  // keeping the summary and the run link.
+  while (lines.join('\n').length > 38000 && lines.length > 12) {
+    lines.splice(lines.length - 3, 1);
+  }
 
   try {
     const res = await fetch(WEBHOOK, {

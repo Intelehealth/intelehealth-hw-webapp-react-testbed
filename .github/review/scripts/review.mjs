@@ -414,7 +414,12 @@ async function main() {
       });
     } catch (err) {
       console.error(`Batch ${i + 1} failed: ${err.message}`);
-      debug.push({ batch: i + 1, files: chunkFiles, error: err.message });
+      debug.push({
+        batch: i + 1,
+        files: chunkFiles,
+        error: err.message,
+        request: err.request ?? null,
+      });
       failures++;
       continue;
     }
@@ -453,6 +458,8 @@ async function main() {
         files: chunkFiles,
         model: result.model,
         unparseable: result.text.slice(0, 1200),
+        request: result.request,
+        response: result.text,
       });
       failures++;
       continue;
@@ -488,6 +495,8 @@ async function main() {
       usage: result.usage,
       kept: findings.length,
       rejected,
+      request: result.request,
+      response: result.text,
     });
   }
 
