@@ -88,3 +88,72 @@ test('finding ids are stable across runs but distinguish real differences', () =
   assert.notEqual(findingId(f()), findingId(f({ line: 11 })));
   assert.notEqual(findingId(f()), findingId(f({ ruleId: 'SEC-002' })));
 });
+
+test('the same rule on the same file is capped at two comments', () => {
+  // A live run posted six near-identical GEN-000 comments on one file.
+  const findings = Array.from({ length: 6 }, (_, i) => ({
+    ruleId: 'GEN-000',
+    file: 'src/review.mjs',
+    line: 100 + i,
+    severity: 'minor',
+    confidence: 0.8,
+    title: `t${i}`,
+    body: 'b',
+  }));
+  const { kept, dropped } = gateFindings(findings);
+  assert.equal(kept.length, 2);
+  assert.equal(dropped.length, 4);
+  assert.match(dropped[0].reason, /GEN-000 on src\/review\.mjs/);
+});
+
+test('the per-rule-file cap does not starve other files or rules', () => {
+  const findings = [
+    {
+      ruleId: 'GEN-000',
+      file: 'src/a.ts',
+      line: 1,
+      severity: 'minor',
+      confidence: 0.8,
+      title: 't',
+      body: 'b',
+    },
+    {
+      ruleId: 'GEN-000',
+      file: 'src/a.ts',
+      line: 2,
+      severity: 'minor',
+      confidence: 0.8,
+      title: 't',
+      body: 'b',
+    },
+    {
+      ruleId: 'GEN-000',
+      file: 'src/a.ts',
+      line: 3,
+      severity: 'minor',
+      confidence: 0.8,
+      title: 't',
+      body: 'b',
+    },
+    {
+      ruleId: 'GEN-000',
+      file: 'src/b.ts',
+      line: 1,
+      severity: 'minor',
+      confidence: 0.8,
+      title: 't',
+      body: 'b',
+    },
+    {
+      ruleId: 'STD-008',
+      file: 'src/a.ts',
+      line: 9,
+      severity: 'major',
+      confidence: 0.8,
+      title: 't',
+      body: 'b',
+    },
+  ];
+  const { kept } = gateFindings(findings);
+  assert.equal(kept.length, 4);
+});

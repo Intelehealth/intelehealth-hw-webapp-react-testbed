@@ -14,6 +14,15 @@ export const MIN_CONFIDENCE = 0.6;
 /** Never bury a reviewer under one PR's worth of comments. */
 export const MAX_COMMENTS = 12;
 
+/*
+ * The same rule firing on the same file is one observation, not six. A run
+ * posted six near-identical GEN-000 comments on one file — each individually
+ * valid, collectively noise, and every extra comment is paid output tokens on
+ * the next run too, because posted comments come back as context. Two per
+ * (rule, file) keeps the pattern visible; the summary notes the rest exist.
+ */
+export const MAX_PER_RULE_FILE = 2;
+
 /** FNV-1a. Short, stable, and enough to tell two findings apart. */
 export function hash32(str) {
   let h = 0x811c9dc5;
@@ -47,11 +56,13 @@ export function gateFindings(findings, opts = {}) {
     minConfidence = MIN_CONFIDENCE,
     minSeverity = 'nit',
     maxComments = MAX_COMMENTS,
+    maxPerRuleFile = MAX_PER_RULE_FILE,
   } = opts;
 
   const floor = SEVERITY_ORDER[minSeverity] ?? SEVERITY_ORDER.nit;
   const kept = [];
   const dropped = [];
+  const perRuleFile = new Map();
 
   // Most severe first, then most confident, so the comment cap keeps the
   // findings that matter rather than whichever the model happened to list.
@@ -76,6 +87,14 @@ export function gateFindings(findings, opts = {}) {
       dropped.push({ finding: f, reason: 'already posted' });
       continue;
     }
+    const rfKey = `${f.ruleId}|${f.file}`;
+    if ((perRuleFile.get(rfKey) ?? 0) >= maxPerRuleFile) {
+      dropped.push({
+        finding: f,
+        reason: `more than ${maxPerRuleFile} × ${f.ruleId} on ${f.file}`,
+      });
+      continue;
+    }
     if (kept.length >= maxComments) {
       dropped.push({
         finding: f,
@@ -83,6 +102,7 @@ export function gateFindings(findings, opts = {}) {
       });
       continue;
     }
+    perRuleFile.set(rfKey, (perRuleFile.get(rfKey) ?? 0) + 1);
     kept.push({ ...f, _fid: fid });
   }
 

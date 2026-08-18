@@ -636,3 +636,71 @@ test('a finding keyed rule_id survives instead of being thrown away', async () =
     stub.server.close();
   }
 });
+
+test('findings outside src/ are rejected unless the rule is SEC or PHI', async () => {
+  // The rulebook scopes rules to src/**, but prose in a prompt is advisory —
+  // a live run reported STD findings on .github/** anyway. Enforced in code.
+  const ciDiff = `diff --git a/.github/scripts/deploy.mjs b/.github/scripts/deploy.mjs
+index 111..222 100644
+--- a/.github/scripts/deploy.mjs
++++ b/.github/scripts/deploy.mjs
+@@ -1,2 +1,4 @@
+ const x = 1;
++console.log(x);
++const token = 'hardcoded';
+`;
+  const reply = JSON.stringify({
+    summary: 'x',
+    findings: [
+      {
+        ruleId: 'STD-008',
+        file: '.github/scripts/deploy.mjs',
+        line: 2,
+        severity: 'major',
+        confidence: 0.9,
+        title: 'console in tooling — out of scope',
+        body: 'b',
+      },
+      {
+        ruleId: 'SEC-001',
+        file: '.github/scripts/deploy.mjs',
+        line: 3,
+        severity: 'blocker',
+        confidence: 0.9,
+        title: 'a credential is in scope anywhere',
+        body: 'b',
+      },
+    ],
+  });
+  const stub = await startStub({ replies: [{ content: reply }] });
+  try {
+    const { findings } = await runReview(stub, {
+      diff: ciDiff,
+      rules: RULES_FILE,
+    });
+    assert.equal(findings.findings.length, 1);
+    assert.equal(findings.findings[0].ruleId, 'SEC-001');
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the model is no longer asked for suggestion blocks', async () => {
+  // Models filled ```suggestion fences with prose; applying one would commit
+  // a sentence into source. Dropped — also most of the paid output tokens.
+  const stub = await startStub({
+    replies: [{ content: OBJ }],
+    models: LIVE_CHAIN,
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    const [call] = stub.calls;
+    const props =
+      call.response_format.json_schema.schema.properties.findings.items;
+    assert.ok(!('suggestion' in props.properties));
+    assert.ok(!props.required.includes('suggestion'));
+    assert.match(call.messages.at(-1).content, /ONE sentence/);
+  } finally {
+    stub.server.close();
+  }
+});

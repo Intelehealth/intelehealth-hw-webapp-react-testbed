@@ -87,6 +87,8 @@ ${files}
 DIFF
 ${diff}
 
+Rules apply only to files under src/ — the application. Do not report findings on other paths (.github/, config files, CI scripts); they are tooling, not the app. The exceptions are SEC and PHI rules, which apply everywhere: a committed credential or a leaked patient identifier is a defect wherever it sits.
+
 Report only problems in lines this diff ADDS or MODIFIES. Lines starting with "+" are added; lines starting with " " are unchanged context shown for reference only — do not report issues in them.
 
 You are seeing only the diff, not the whole repository. If judging something would require code you cannot see, either lower your confidence accordingly or leave it out.
@@ -104,8 +106,7 @@ Reply with exactly this JSON shape:
       "severity": "blocker | major | minor | nit",
       "confidence": 0.85,
       "title": "one line, under 80 characters",
-      "body": "why this is a problem here and what to do about it",
-      "suggestion": "optional: exact replacement code for those lines, no code fences"
+      "body": "ONE sentence: why it is a problem and what to do. Two only when one truly cannot carry it."
     }
   ]
 }
@@ -147,7 +148,6 @@ const RESPONSE_SCHEMA = {
           'confidence',
           'title',
           'body',
-          'suggestion',
         ],
         properties: {
           ruleId: { type: 'string' },
@@ -161,7 +161,6 @@ const RESPONSE_SCHEMA = {
           confidence: { type: 'number' },
           title: { type: 'string' },
           body: { type: 'string' },
-          suggestion: { type: ['string', 'null'] },
         },
       },
     },
@@ -178,6 +177,17 @@ function pick(obj, ...names) {
     if (obj[n] !== undefined && obj[n] !== null) return obj[n];
   }
   return undefined;
+}
+
+/*
+ * The rulebook's scope, enforced in code. The Scope section says rules apply
+ * to src/** and not to tooling — but prose in a prompt is advisory, and the
+ * model demonstrably reports STD findings on .github/** anyway. SEC and PHI
+ * are the exception: a committed credential is a defect wherever it appears.
+ */
+function inScope(file, ruleId) {
+  if (ruleId.startsWith('SEC-') || ruleId.startsWith('PHI-')) return true;
+  return file.startsWith('src/');
 }
 
 /** Keep only findings that name a file we actually sent and a rule that exists. */
@@ -218,6 +228,10 @@ function sanitise(findings, chunkFiles, validRuleIds) {
       rejected.push(`file not in this batch: ${file}`);
       continue;
     }
+    if (!inScope(file, ruleId)) {
+      rejected.push(`out of scope for ${ruleId}: ${file}`);
+      continue;
+    }
     if (!Number.isInteger(line) || line < 1) {
       rejected.push(`bad line on ${ruleId}`);
       continue;
@@ -245,10 +259,7 @@ function sanitise(findings, chunkFiles, validRuleIds) {
       severity,
       confidence: Math.min(1, Math.max(0, confidence)),
       title: String(title).slice(0, 120),
-      body: String(body).slice(0, 4000),
-      ...(f.suggestion
-        ? { suggestion: String(f.suggestion).slice(0, 2000) }
-        : {}),
+      body: String(body).slice(0, 600),
     });
   }
   return { findings: out, rejected };

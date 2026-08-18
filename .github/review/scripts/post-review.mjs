@@ -103,14 +103,12 @@ function commentBody(f) {
     f.body,
   ];
 
-  if (f.suggestion) {
-    parts.push(
-      '',
-      '```suggestion',
-      f.suggestion.replace(/^```\w*\n?|```$/g, ''),
-      '```'
-    );
-  }
+  /*
+   * No ```suggestion fences. The model kept writing prose advice into them,
+   * and GitHub's "Apply suggestion" button commits fence content into the file
+   * verbatim — one click would have replaced a line of code with a sentence.
+   * Suggestions were also most of the paid output tokens.
+   */
 
   parts.push(
     '',
@@ -439,9 +437,9 @@ function applyMergeGate(blocking, incomplete) {
 
 main().catch(err => {
   // An API failure before the gate ran means we do not know whether this PR is
-  // clean. Exiting zero here would publish a green check on an unread review.
-  failIncomplete(`post-review failed before the gate ran (${err.message})`);
-  // Log loudly, exit clean. The reviewer is advisory; it must never be the
-  // reason a pull request cannot merge.
+  // clean. Exiting zero here would publish a green check on an unread review,
+  // so failIncomplete sets the exit code (when REQUIRE_COMPLETE_REVIEW is on)
+  // and returns — it never exits, the log below always runs.
   console.error(`post-review failed: ${err.stack || err.message}`);
+  failIncomplete(`post-review failed before the gate ran (${err.message})`);
 });
