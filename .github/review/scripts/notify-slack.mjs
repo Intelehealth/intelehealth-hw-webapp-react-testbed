@@ -24,6 +24,13 @@ const SERVER = process.env.GITHUB_SERVER_URL || 'https://github.com';
 const DEBUG_PATH = '.claude-review/openrouter-debug.json';
 const FINDINGS_PATH = '.claude-review/findings.json';
 
+/*
+ * A fetch failure can quote the URL it was given verbatim — a malformed
+ * webhook lands in the workflow log as itself, and Actions' secret masking
+ * only catches the exact stored value. Nothing logged here may contain it.
+ */
+const scrub = text => String(text).replaceAll(WEBHOOK, '[webhook]');
+
 const readJson = path => {
   try {
     return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
@@ -150,10 +157,10 @@ async function main() {
         : `Slack rejected the digest: ${res.status} ${(await res.text()).slice(0, 200)}`
     );
   } catch (err) {
-    console.error(`Could not reach Slack: ${err.message}`);
+    console.error(`Could not reach Slack: ${scrub(err.message)}`);
   }
 }
 
 main().catch(err => {
-  console.error(`notify-slack failed: ${err.message}`);
+  console.error(`notify-slack failed: ${scrub(err.message)}`);
 });
