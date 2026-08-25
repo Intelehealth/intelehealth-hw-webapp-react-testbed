@@ -20,11 +20,11 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  buildRulesDigest,
   chooseModels,
   complete,
   estimateTokens,
   extractJson,
+  isTestFile,
   keyStatus,
   listModels,
   MAX_FALLBACK_MODELS,
@@ -32,10 +32,10 @@ import {
   splitDiffByFile,
   CHARS_PER_TOKEN,
 } from './lib/openrouter.mjs';
-import { isExplorationSlot } from './lib/scoring.mjs';
+import { parseRules, buildDigest } from './lib/rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RULES_PATH = join(HERE, '..', 'rules.json');
+const RULES_PATH = join(HERE, '..', 'review-rules.md');
 const OUT_DIR = '.claude-review';
 const DIFF_PATH = join(OUT_DIR, 'pr.diff');
 const FINDINGS_PATH = join(OUT_DIR, 'findings.json');
@@ -44,9 +44,10 @@ const DEBUG_PATH = join(OUT_DIR, 'openrouter-debug.json');
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const PR_NUMBER = process.env.PR_NUMBER || '0';
 const PR_TITLE = process.env.PR_TITLE || '';
-const PR_BODY = (process.env.PR_BODY || '').slice(0, 1500);
 const MAX_REQUESTS = Number(process.env.MAX_REQUESTS) || 4;
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS) || 4000;
+/** Confirm an empty batch against a second model. `0` disables it. */
+const SECOND_OPINION = process.env.SECOND_OPINION !== '0';
 const PREFERRED = (process.env.OPENROUTER_MODELS || '')
   .split(',')
   .map(s => s.trim())
@@ -71,22 +72,31 @@ You are strict about false positives. A short review with two real problems is f
 
 Never report: formatting or style that a linter handles, naming preferences, missing comments, speculative refactors, praise, or restatements of what the code does.`;
 
-function userPrompt({ digest, chunk, chunkIndex, chunkCount }) {
+function userPrompt({ digest, chunk, chunkIndex, chunkCount, testFiles }) {
   const files = chunk.map(f => f.file).join('\n');
   const diff = chunk.map(f => f.patch).join('\n');
 
   return `Review this pull request diff against the rules below.
 
-${PR_TITLE ? `PULL REQUEST TITLE\n${PR_TITLE}\n` : ''}${PR_BODY ? `\nDESCRIPTION\n${PR_BODY}\n` : ''}
+${PR_TITLE ? `PULL REQUEST TITLE\n${PR_TITLE}\n` : ''}
 RULES — every finding must cite one of these rule IDs. If you find a real problem that no rule covers, use GEN-000 and name the missing rule in the body.
 
 ${digest}
 
 FILES IN THIS BATCH${chunkCount > 1 ? ` (batch ${chunkIndex + 1} of ${chunkCount})` : ''}
 ${files}
-
+${
+  testFiles.length
+    ? `
+TEST FILES THIS PR ALSO CHANGES — names only, bodies deliberately not sent. Treat these as tests that exist, so do not report a missing test for behaviour they cover, and do not report findings against these paths.
+${testFiles.join('\n')}
+`
+    : ''
+}
 DIFF
 ${diff}
+
+Rules apply only to files under src/ — the application. Do not report findings on other paths (.github/, config files, CI scripts); they are tooling, not the app. The exceptions are SEC and PHI rules, which apply everywhere: a committed credential or a leaked patient identifier is a defect wherever it sits.
 
 Report only problems in lines this diff ADDS or MODIFIES. Lines starting with "+" are added; lines starting with " " are unchanged context shown for reference only — do not report issues in them.
 
@@ -105,8 +115,7 @@ Reply with exactly this JSON shape:
       "severity": "blocker | major | minor | nit",
       "confidence": 0.85,
       "title": "one line, under 80 characters",
-      "body": "why this is a problem here and what to do about it",
-      "suggestion": "optional: exact replacement code for those lines, no code fences"
+      "body": "ONE sentence: why it is a problem and what to do. Two only when one truly cannot carry it."
     }
   ]
 }
@@ -118,6 +127,78 @@ Reply with exactly this JSON shape:
 If you find nothing worth reporting, return an empty findings array. That is a perfectly good answer.`;
 }
 
+/*
+ * The shape we force the model into via `response_format: json_schema`.
+ *
+ * This is deliberately a separate, looser object from findings.schema.json.
+ * Strict mode requires every property to appear in `required` and forbids
+ * additionalProperties, so genuinely optional fields (endLine, suggestion)
+ * have to be declared nullable rather than omitted. findings.schema.json stays
+ * the stricter contract that post-review.mjs validates the written file
+ * against; this one only has to survive the provider's validator.
+ */
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'findings'],
+  properties: {
+    summary: { type: 'string' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'ruleId',
+          'file',
+          'line',
+          'endLine',
+          'severity',
+          'confidence',
+          'title',
+          'body',
+        ],
+        properties: {
+          ruleId: { type: 'string' },
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          endLine: { type: ['integer', 'null'] },
+          severity: {
+            type: 'string',
+            enum: ['blocker', 'major', 'minor', 'nit'],
+          },
+          confidence: { type: 'number' },
+          title: { type: 'string' },
+          body: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/*
+ * Not every model in the chain supports structured outputs, and the ones that
+ * do not are free to invent key names. Accept the spellings they actually
+ * reach for so a good finding is not discarded over casing.
+ */
+function pick(obj, ...names) {
+  for (const n of names) {
+    if (obj[n] !== undefined && obj[n] !== null) return obj[n];
+  }
+  return undefined;
+}
+
+/*
+ * The rulebook's scope, enforced in code. The Scope section says rules apply
+ * to src/** and not to tooling — but prose in a prompt is advisory, and the
+ * model demonstrably reports STD findings on .github/** anyway. SEC and PHI
+ * are the exception: a committed credential is a defect wherever it appears.
+ */
+function inScope(file, ruleId) {
+  if (ruleId.startsWith('SEC-') || ruleId.startsWith('PHI-')) return true;
+  return file.startsWith('src/');
+}
+
 /** Keep only findings that name a file we actually sent and a rule that exists. */
 function sanitise(findings, chunkFiles, validRuleIds) {
   const fileSet = new Set(chunkFiles);
@@ -127,22 +208,37 @@ function sanitise(findings, chunkFiles, validRuleIds) {
   for (const f of Array.isArray(findings) ? findings : []) {
     if (!f || typeof f !== 'object') continue;
 
-    const ruleId = String(f.ruleId || '')
+    const rawRuleId = pick(f, 'ruleId', 'rule_id', 'ruleID', 'rule', 'id');
+    const file = pick(f, 'file', 'path', 'filename', 'file_path');
+    const ruleId = String(rawRuleId || '')
       .toUpperCase()
       .trim();
-    const line = Number.parseInt(f.line, 10);
-    const endLine = Number.parseInt(f.endLine, 10);
-    const severity = String(f.severity || '')
+    const line = Number.parseInt(
+      pick(f, 'line', 'line_number', 'lineNumber'),
+      10
+    );
+    const endLine = Number.parseInt(pick(f, 'endLine', 'end_line'), 10);
+    const severity = String(pick(f, 'severity', 'level') || '')
       .toLowerCase()
       .trim();
-    const confidence = Number(f.confidence);
+    const confidence = Number(pick(f, 'confidence', 'score'));
 
-    if (!validRuleIds.has(ruleId)) {
-      rejected.push(`invented rule id ${f.ruleId}`);
+    if (!ruleId) {
+      rejected.push(
+        `missing rule id (model returned keys: ${Object.keys(f).join(', ') || 'none'})`
+      );
       continue;
     }
-    if (!fileSet.has(f.file)) {
-      rejected.push(`file not in this batch: ${f.file}`);
+    if (!validRuleIds.has(ruleId)) {
+      rejected.push(`invented rule id ${ruleId}`);
+      continue;
+    }
+    if (!fileSet.has(file)) {
+      rejected.push(`file not in this batch: ${file}`);
+      continue;
+    }
+    if (!inScope(file, ruleId)) {
+      rejected.push(`out of scope for ${ruleId}: ${file}`);
       continue;
     }
     if (!Number.isInteger(line) || line < 1) {
@@ -157,23 +253,22 @@ function sanitise(findings, chunkFiles, validRuleIds) {
       rejected.push(`confidence below threshold on ${ruleId}`);
       continue;
     }
-    if (!f.title || !f.body) {
+    const title = pick(f, 'title', 'summary', 'message');
+    const body = pick(f, 'body', 'description', 'detail', 'explanation');
+    if (!title || !body) {
       rejected.push(`missing title or body on ${ruleId}`);
       continue;
     }
 
     out.push({
       ruleId,
-      file: f.file,
+      file,
       line,
       ...(Number.isInteger(endLine) && endLine >= line ? { endLine } : {}),
       severity,
       confidence: Math.min(1, Math.max(0, confidence)),
-      title: String(f.title).slice(0, 120),
-      body: String(f.body).slice(0, 4000),
-      ...(f.suggestion
-        ? { suggestion: String(f.suggestion).slice(0, 2000) }
-        : {}),
+      title: String(title).slice(0, 120),
+      body: String(body).slice(0, 600),
     });
   }
   return { findings: out, rejected };
@@ -218,16 +313,19 @@ async function main() {
     return;
   }
 
-  const book = JSON.parse(readFileSync(RULES_PATH, 'utf8'));
-  const explorationPercent = book.defaults?.explorationPercent ?? 10;
-  const { digest, included, exploring } = buildRulesDigest(book.rules, ruleId =>
-    isExplorationSlot(ruleId, PR_NUMBER, explorationPercent)
-  );
-  const validRuleIds = new Set(included);
-  console.log(
-    `Rulebook v${book.version}: ${included.length} rule(s) in play` +
-      (exploring.length ? `, re-testing muted ${exploring.join(', ')}` : '')
-  );
+  const rules = parseRules(readFileSync(RULES_PATH, 'utf8'));
+  if (rules.length === 0) {
+    writeFindings({
+      summary: 'Review skipped: review-rules.md contains no rules.',
+      findings: [],
+      reviewed: false,
+      inconclusive: 'the rulebook is empty or unparseable',
+    });
+    return;
+  }
+  const digest = buildDigest(rules);
+  const validRuleIds = new Set(rules.map(r => r.id));
+  console.log(`Rulebook: ${rules.length} rule(s) from review-rules.md`);
 
   // --- pick models --------------------------------------------------------
   let available;
@@ -282,7 +380,33 @@ async function main() {
     Math.floor(budgetTokens * CHARS_PER_TOKEN)
   );
 
-  const files = splitDiffByFile(diff);
+  const allFiles = splitDiffByFile(diff);
+  const files = allFiles.filter(f => !isTestFile(f.file));
+  const testFiles = allFiles.filter(f => isTestFile(f.file)).map(f => f.file);
+  if (testFiles.length) {
+    console.log(
+      `Skipping ${testFiles.length} unit-test file(s); names still sent so ` +
+        `"missing test" rules stay answerable.`
+    );
+  }
+
+  /*
+   * A tests-only PR has nothing left to review. That is a clean pass, not a
+   * failed one — reporting it inconclusive would wedge the merge behind a
+   * review that had no application code to look at.
+   */
+  if (files.length === 0) {
+    writeFindings({
+      summary: testFiles.length
+        ? `Only unit-test files changed (${testFiles.length}); no application code to review.`
+        : 'No reviewable changes in this pull request.',
+      findings: [],
+      reviewed: true,
+    });
+    console.log('No application code in this diff. Nothing to review.');
+    return;
+  }
+
   const { chunks, skipped, truncated } = packChunks(files, {
     budgetChars,
     maxChunks: MAX_REQUESTS,
@@ -300,11 +424,20 @@ async function main() {
   const seen = new Set();
   let failures = 0;
   let repaired = 0;
+  let secondOpinions = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     const chunkFiles = chunk.map(f => f.file);
     if (i > 0) await sleep(REQUEST_SPACING_MS);
+
+    const prompt = userPrompt({
+      digest,
+      chunk,
+      chunkIndex: i,
+      chunkCount: chunks.length,
+      testFiles,
+    });
 
     let result;
     try {
@@ -312,48 +445,63 @@ async function main() {
         apiKey: API_KEY,
         models: chain.map(m => m.id),
         system: SYSTEM_PROMPT,
-        user: userPrompt({
-          digest,
-          chunk,
-          chunkIndex: i,
-          chunkCount: chunks.length,
-        }),
+        user: prompt,
         maxTokens: MAX_OUTPUT_TOKENS,
         jsonMode,
+        schema: RESPONSE_SCHEMA,
         title: `PR Review #${PR_NUMBER}`,
       });
     } catch (err) {
       console.error(`Batch ${i + 1} failed: ${err.message}`);
-      debug.push({ batch: i + 1, files: chunkFiles, error: err.message });
+      debug.push({
+        batch: i + 1,
+        files: chunkFiles,
+        error: err.message,
+        request: err.request ?? null,
+      });
       failures++;
       continue;
     }
 
     let parsed = extractJson(result.text);
 
-    // Free models sometimes narrate before the JSON. One cheap repair attempt.
+    /*
+     * A reply we cannot parse means this model failed on this input, so retry
+     * on a DIFFERENT one — the degeneracy is model- and input-specific, and
+     * asking the same model the same question tends to fail the same way.
+     *
+     * Send the original prompt, not the broken reply. The old repair pass fed
+     * the garbage back and asked for it as JSON, which produced a tidy summary
+     * of noise and an empty findings array — a batch that never reviewed the
+     * diff but no longer looked like a failure.
+     */
     if (!parsed) {
+      const others = chain.map(m => m.id).filter(id => id !== result.model);
       console.log(
-        `Batch ${i + 1}: unparseable reply from ${result.model}, retrying once.`
+        `Batch ${i + 1}: unparseable reply from ${result.model}; ` +
+          (others.length
+            ? `re-reviewing on ${others[0]}.`
+            : 'no other model in the chain to try.')
       );
       repaired++;
-      await sleep(REQUEST_SPACING_MS);
-      try {
-        const repair = await complete({
-          apiKey: API_KEY,
-          models: chain.map(m => m.id),
-          system: SYSTEM_PROMPT,
-          user:
-            'Your previous reply was not valid JSON. Return the same content as a single JSON ' +
-            'object with keys "summary" and "findings", and nothing else.\n\n' +
-            'Previous reply:\n' +
-            result.text.slice(0, 6000),
-          maxTokens: MAX_OUTPUT_TOKENS,
-          jsonMode,
-        });
-        parsed = extractJson(repair.text);
-      } catch (err) {
-        console.error(`Batch ${i + 1} repair failed: ${err.message}`);
+      if (others.length) {
+        await sleep(REQUEST_SPACING_MS);
+        try {
+          const retry = await complete({
+            apiKey: API_KEY,
+            models: others,
+            system: SYSTEM_PROMPT,
+            user: prompt,
+            maxTokens: MAX_OUTPUT_TOKENS,
+            jsonMode,
+            schema: RESPONSE_SCHEMA,
+            title: `PR Review #${PR_NUMBER}`,
+          });
+          parsed = extractJson(retry.text);
+          if (parsed) result = retry;
+        } catch (err) {
+          console.error(`Batch ${i + 1} retry failed: ${err.message}`);
+        }
       }
     }
 
@@ -363,16 +511,84 @@ async function main() {
         files: chunkFiles,
         model: result.model,
         unparseable: result.text.slice(0, 1200),
+        request: result.request,
+        response: result.text,
       });
       failures++;
       continue;
     }
 
-    const { findings, rejected } = sanitise(
+    let { findings, rejected } = sanitise(
       parsed.findings,
       chunkFiles,
       validRuleIds
     );
+
+    /*
+     * "No findings" is the one answer that is indistinguishable from a review
+     * that never happened, and it is the answer a weak model reaches for. On
+     * this repo's PR #309 — a diff with at least one duplicated constant and
+     * several arrays rebuilt per render — qwen/qwen3-coder returned an empty
+     * array on three consecutive runs while deepseek-v4-pro found six findings
+     * on the same input, for +$0.0015. So an empty result is confirmed by a
+     * second model before it is believed; anything else lets a clean report
+     * rest on the cheapest model having said nothing.
+     *
+     * Only empty batches pay for this, and only once.
+     */
+    if (findings.length === 0 && SECOND_OPINION) {
+      const others = chain.map(m => m.id).filter(id => id !== result.model);
+      if (others.length) {
+        console.log(
+          `Batch ${i + 1}: no findings from ${result.model}; ` +
+            `confirming with ${others[0]}.`
+        );
+        await sleep(REQUEST_SPACING_MS);
+        try {
+          const second = await complete({
+            apiKey: API_KEY,
+            models: others,
+            system: SYSTEM_PROMPT,
+            user: prompt,
+            maxTokens: MAX_OUTPUT_TOKENS,
+            jsonMode,
+            schema: RESPONSE_SCHEMA,
+            title: `PR Review #${PR_NUMBER}`,
+          });
+          const reparsed = extractJson(second.text);
+          if (reparsed) {
+            const confirm = sanitise(
+              reparsed.findings,
+              chunkFiles,
+              validRuleIds
+            );
+            findings = confirm.findings;
+            rejected = [...rejected, ...confirm.rejected];
+            secondOpinions++;
+            console.log(
+              `   ${second.model} found ${findings.length} finding(s).`
+            );
+            debug.push({
+              batch: i + 1,
+              files: chunkFiles,
+              model: second.model,
+              secondOpinion: true,
+              usage: second.usage,
+              kept: findings.length,
+              rejected: confirm.rejected,
+              request: second.request,
+              response: second.text,
+            });
+          }
+        } catch (err) {
+          console.error(
+            `Batch ${i + 1} second opinion failed: ${err.message}. ` +
+              `Keeping the empty result.`
+          );
+        }
+      }
+    }
+
     for (const f of findings) {
       const key = `${f.ruleId}|${f.file}|${f.line}`;
       if (seen.has(key)) continue;
@@ -385,6 +601,12 @@ async function main() {
       `Batch ${i + 1}/${chunks.length} via ${result.model}: ` +
         `${findings.length} finding(s) kept, ${rejected.length} rejected.`
     );
+    // A rejected finding means the model DID find something and we discarded it
+    // — a very different problem from the model finding nothing. Say why here
+    // rather than only in an artifact.
+    for (const reason of [...new Set(rejected)].slice(0, 10)) {
+      console.log(`   rejected: ${reason}`);
+    }
     debug.push({
       batch: i + 1,
       files: chunkFiles,
@@ -392,6 +614,8 @@ async function main() {
       usage: result.usage,
       kept: findings.length,
       rejected,
+      request: result.request,
+      response: result.text,
     });
   }
 
@@ -439,9 +663,14 @@ async function main() {
     inconclusive = `${skipped.length} file(s) exceeded the ${MAX_REQUESTS}-request budget and were never read: ${skipped.join(', ')}`;
   } else if (all.length === 0 && GAVE_UP.test(summaries.join(' '))) {
     inconclusive = 'the model reported that it did not see the code';
-  } else if (all.length === 0 && repaired > 0) {
-    inconclusive = `${repaired} batch(es) returned unparseable output and then found nothing, which usually means the model did not engage with the diff`;
   }
+  /*
+   * An unparseable batch that never recovered is already counted in `failures`
+   * above. `repaired` only records that a retry was needed — and that retry now
+   * re-reviews the diff on a different model rather than reformatting the
+   * broken reply, so a recovered batch finding nothing is a real answer and
+   * must not be reported as a review that did not happen.
+   */
 
   if (inconclusive) {
     console.log(`Review is inconclusive: ${inconclusive}.`);
@@ -453,9 +682,30 @@ async function main() {
     reviewed: !inconclusive,
     ...(inconclusive ? { inconclusive } : {}),
   });
+  /*
+   * The run's real bill, from the account itself: key usage after minus key
+   * usage before. Catches whatever per-request numbers miss (repair calls,
+   * retries billed without a usage block). May read a little low if
+   * OpenRouter's accounting has not settled by the time this runs.
+   */
+  const statusAfter = await keyStatus(API_KEY);
+  const account =
+    status && statusAfter
+      ? {
+          before: status.usage ?? null,
+          after: statusAfter.usage ?? null,
+          billed:
+            typeof statusAfter.usage === 'number' &&
+            typeof status.usage === 'number'
+              ? Number((statusAfter.usage - status.usage).toFixed(6))
+              : null,
+          limit: statusAfter.limit ?? null,
+        }
+      : null;
+
   writeFileSync(
     DEBUG_PATH,
-    JSON.stringify({ chain: chain.map(m => m.id), debug }, null, 2)
+    JSON.stringify({ chain: chain.map(m => m.id), account, debug }, null, 2)
   );
   console.log(`Wrote ${all.length} finding(s) to ${FINDINGS_PATH}.`);
 }
@@ -463,7 +713,12 @@ async function main() {
 main().catch(err => {
   console.error(`openrouter-review failed: ${err.stack || err.message}`);
   try {
-    writeFindings({ summary: `Review failed: ${err.message}`, findings: [] });
+    writeFindings({
+      summary: `Review failed: ${err.message}`,
+      findings: [],
+      reviewed: false,
+      inconclusive: `the review crashed (${err.message})`,
+    });
   } catch {
     /* nothing more we can do */
   }

@@ -178,7 +178,7 @@ test('a finding already posted on an earlier run is not reposted', async () => {
       id: 100,
       body:
         'old\n<!-- ih-tek-review rule=SEC-001 fid=' +
-        (await import('../lib/scoring.mjs')).findingId(base) +
+        (await import('../lib/gate.mjs')).findingId(base) +
         ' -->',
     },
   ];
@@ -282,7 +282,7 @@ test('findings already posted still block on a re-run', async () => {
       id: 100,
       body:
         'old\n<!-- ih-tek-review rule=SEC-001 fid=' +
-        (await import('../lib/scoring.mjs')).findingId(base) +
+        (await import('../lib/gate.mjs')).findingId(base) +
         ' -->',
     },
   ];
