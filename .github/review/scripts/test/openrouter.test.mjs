@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  buildRulesDigest,
   chooseModels,
   extractJson,
+  isTestFile,
   packChunks,
   rankModels,
   splitDiffByFile,
@@ -28,7 +28,7 @@ import {
 
 const run = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPT = join(HERE, '..', 'openrouter-review.mjs');
+const SCRIPT = join(HERE, '..', 'review.mjs');
 
 // --- diff splitting --------------------------------------------------------
 
@@ -69,6 +69,34 @@ test('a renamed file is keyed by its new path', () => {
 test('an empty diff yields no sections', () => {
   assert.deepEqual(splitDiffByFile(''), []);
   assert.deepEqual(splitDiffByFile('   '), []);
+});
+
+// --- test-file detection ---------------------------------------------------
+
+test('recognises this repo’s unit-test paths', () => {
+  for (const p of [
+    'src/App.test.tsx',
+    'src/hooks/useColumnSort.test.ts',
+    'src/test/utils.tsx',
+    'src/test/mocks/react-datepicker.ts',
+    'src/test/modules/ayu/physical-examination.component.test.tsx',
+    'src/foo.spec.js',
+    'src/__tests__/thing.ts',
+    'src/__mocks__/thing.ts',
+  ]) {
+    assert.ok(isTestFile(p), `${p} should be treated as a test file`);
+  }
+});
+
+test('does not mistake application code for a test', () => {
+  for (const p of [
+    'src/modules/ayu-library/logic/visit-summary.logic.ts',
+    'src/features/latest/index.ts', // contains "test" but is not a test dir
+    'src/components/Contest.tsx',
+    'src/utils/testing-helpers-docs.md',
+  ]) {
+    assert.ok(!isTestFile(p), `${p} must stay reviewable`);
+  }
 });
 
 // --- chunk packing ---------------------------------------------------------
@@ -174,6 +202,17 @@ test('handles escaped quotes inside strings', () => {
   assert.equal(extractJson(tricky).summary, 'he said "hi" then left');
 });
 
+test('a whitespace runaway is salvaged instead of discarded', () => {
+  // Grammar-constrained decoding still permits unlimited whitespace, so a
+  // reply can flood newlines to max_tokens and never close its object.
+  const flooded = '{\n  "findings": []\n' + '\n'.repeat(20000);
+  assert.deepEqual(extractJson(flooded), { findings: [] });
+
+  const midString =
+    '{"findings": [], "summary": "the export is off by' + '\n'.repeat(5000);
+  assert.equal(extractJson(midString).summary, 'the export is off by');
+});
+
 test('returns null rather than guessing on unusable output', () => {
   assert.equal(extractJson('I cannot review this.'), null);
   assert.equal(extractJson(''), null);
@@ -186,41 +225,14 @@ test('returns null rather than guessing on unusable output', () => {
   );
 });
 
-// --- rules digest ----------------------------------------------------------
-
-const RULES = {
-  'SEC-001': { title: 'Injection', severity: 'blocker', state: 'active' },
-  'FE-005': { title: 'Index key', severity: 'minor', state: 'probation' },
-  'TS-004': { title: 'Dead code', severity: 'minor', state: 'muted' },
-};
-
-test('the digest omits muted rules, so the model cannot report them', () => {
-  const { digest, included } = buildRulesDigest(RULES, () => false);
-  assert.ok(!digest.includes('TS-004'));
-  assert.deepEqual(included, ['SEC-001', 'FE-005']);
-});
-
-test('probation rules are included with their severity restriction', () => {
-  const { digest } = buildRulesDigest(RULES, () => false);
-  assert.match(
-    digest,
-    /FE-005 \[minor\] Index key \(only report at blocker\/major severity\)/
-  );
-});
-
-test('an exploration slot puts a muted rule back in play', () => {
-  const { digest, exploring } = buildRulesDigest(RULES, id => id === 'TS-004');
-  assert.match(digest, /TS-004/);
-  assert.deepEqual(exploring, ['TS-004']);
-});
-
-test('the digest stays small enough to leave context for the diff', () => {
-  const { digest } = buildRulesDigest(RULES, () => false);
-  assert.ok(digest.length < 500);
-  assert.equal(digest.split('\n').length, 2, 'one line per rule');
-});
-
 // --- model selection -------------------------------------------------------
+
+/* The chain configured in production, so the tests exercise what actually runs. */
+const LIVE_CHAIN = [
+  { id: 'deepseek/deepseek-v4-pro', context: 204800, structured: true },
+  { id: 'qwen/qwen3-coder', context: 262144, structured: true },
+  { id: 'z-ai/glm-4.7', context: 204800, structured: true },
+];
 
 const AVAILABLE = [
   { id: 'big/model:free', context: 262144, structured: false },
@@ -231,7 +243,27 @@ const AVAILABLE = [
 test('preferred models lead the chain when they are still available', () => {
   const chain = chooseModels(AVAILABLE, ['mid/model:free'], 3);
   assert.equal(chain[0].id, 'mid/model:free');
+});
+
+test('fallbacks are appended when they keep the schema intact', () => {
+  const allStructured = [
+    { id: 'a:free', context: 200000, structured: true },
+    { id: 'b:free', context: 100000, structured: true },
+    { id: 'c:free', context: 50000, structured: true },
+  ];
+  const chain = chooseModels(allStructured, ['b:free'], 3);
+  assert.equal(chain[0].id, 'b:free');
   assert.equal(chain.length, 3, 'the rest are appended as fallbacks');
+});
+
+test('auto-fill never costs a structured primary its JSON schema', () => {
+  // jsonMode is chain.every(m => m.structured), so one non-structured fallback
+  // disables the schema for the paid primary that was named to get it.
+  const chain = chooseModels(AVAILABLE, ['mid/model:free'], 3);
+  assert.ok(
+    chain.every(m => m.structured),
+    'a structured primary must not be joined by non-structured fallbacks'
+  );
 });
 
 test('a preferred model that no longer exists is skipped, not fatal', () => {
@@ -287,6 +319,7 @@ test('ranking does not mutate the caller array', () => {
 async function startStub({ replies, models = AVAILABLE }) {
   const calls = [];
   let i = 0;
+  let keyReads = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', c => (body += c));
@@ -304,8 +337,11 @@ async function startStub({ replies, models = AVAILABLE }) {
           })),
         });
       }
+      // Usage grows on each read so the billed-delta calculation is testable.
       if (req.url.endsWith('/key'))
-        return send(200, { data: { usage: 1, limit: null } });
+        return send(200, {
+          data: { usage: 1 + keyReads++ * 0.005, limit: null },
+        });
       if (req.url.endsWith('/chat/completions')) {
         calls.push(JSON.parse(body));
         const reply = replies[Math.min(i++, replies.length - 1)];
@@ -329,26 +365,26 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
   await mkdir(join(dir, '.claude-review'), { recursive: true });
   await writeFile(join(dir, '.claude-review', 'pr.diff'), diff);
 
-  // The script reads rules.json relative to itself, so point it at a copy only
-  // when the test needs different rules.
+  // The script reads review-rules.md relative to itself, so point it at a copy
+  // only when the test needs different rules.
   let scriptPath = SCRIPT;
   if (rules) {
     const reviewDir = join(dir, 'review');
     await mkdir(join(reviewDir, 'scripts', 'lib'), { recursive: true });
-    await writeFile(join(reviewDir, 'rules.json'), JSON.stringify(rules));
-    for (const f of ['openrouter-review.mjs']) {
+    await writeFile(join(reviewDir, 'review-rules.md'), rules);
+    for (const f of ['review.mjs']) {
       await writeFile(
         join(reviewDir, 'scripts', f),
         await readFile(join(HERE, '..', f))
       );
     }
-    for (const f of ['openrouter.mjs', 'scoring.mjs']) {
+    for (const f of ['openrouter.mjs', 'rules.mjs', 'gate.mjs']) {
       await writeFile(
         join(reviewDir, 'scripts', 'lib', f),
         await readFile(join(HERE, '..', 'lib', f))
       );
     }
-    scriptPath = join(reviewDir, 'scripts', 'openrouter-review.mjs');
+    scriptPath = join(reviewDir, 'scripts', 'review.mjs');
   }
 
   const { stdout, stderr } = await run(process.execPath, [scriptPath], {
@@ -364,23 +400,19 @@ async function runReview(stub, { diff = DIFF, rules, env = {} } = {}) {
   const findings = JSON.parse(
     await readFile(join(dir, '.claude-review', 'findings.json'), 'utf8')
   );
+  // Early exits (no API key) legitimately write findings without a debug file.
+  const debug = await readFile(
+    join(dir, '.claude-review', 'openrouter-debug.json'),
+    'utf8'
+  ).then(JSON.parse, () => null);
   await rm(dir, { recursive: true, force: true });
-  return { stdout, stderr, findings };
+  return { stdout, stderr, findings, debug };
 }
 
-const RULES_FILE = {
-  version: 1,
-  defaults: { explorationPercent: 0 },
-  rules: {
-    'SEC-001': {
-      title: 'Injection',
-      severity: 'blocker',
-      state: 'active',
-      weight: 0.7,
-      stats: {},
-    },
-  },
-};
+const RULES_FILE = `# Rulebook
+
+**SEC-001 · blocker · Injection.** String concatenation building SQL.
+`;
 
 const goodFinding = {
   ruleId: 'SEC-001',
@@ -463,7 +495,7 @@ test('invented rule IDs and file paths are discarded', async () => {
   }
 });
 
-test('an unparseable reply triggers exactly one repair attempt', async () => {
+test('an unparseable reply is re-reviewed once on a different model', async () => {
   const stub = await startStub({
     replies: [
       { content: 'I am unable to produce JSON right now.' },
@@ -477,9 +509,98 @@ test('an unparseable reply triggers exactly one repair attempt', async () => {
   });
   try {
     const { findings, stdout } = await runReview(stub, { rules: RULES_FILE });
-    assert.match(stdout, /retrying once/);
+    assert.match(stdout, /re-reviewing on/);
     assert.equal(findings.findings.length, 1);
-    assert.equal(stub.calls.length, 2);
+    assert.equal(stub.calls.length, 2, 'exactly one retry');
+
+    // The model that failed must not lead the retry chain.
+    const served = 'big/model:free';
+    assert.ok(
+      !stub.calls[1].models.includes(served),
+      'the failed model must be dropped from the retry'
+    );
+    // The retry must re-review the diff, not reformat the broken reply.
+    const retryPrompt = stub.calls[1].messages.at(-1).content;
+    assert.match(retryPrompt, /const y = 2/, 'the diff must be re-sent');
+    assert.ok(
+      !retryPrompt.includes('I am unable to produce JSON'),
+      'the broken reply must not be fed back'
+    );
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('an empty batch is confirmed against a second model', async () => {
+  // Measured on PR #309: qwen returned [] three times running on a diff where
+  // deepseek found six real findings. An empty result must not be believed on
+  // one cheap model's word.
+  const stub = await startStub({
+    replies: [
+      { content: JSON.stringify({ summary: 'nothing here', findings: [] }) },
+      {
+        content: JSON.stringify({
+          summary: 'actually there is',
+          findings: [goodFinding],
+        }),
+      },
+    ],
+  });
+  try {
+    const { findings, stdout } = await runReview(stub, { rules: RULES_FILE });
+    assert.equal(stub.calls.length, 2, 'the empty batch is re-asked once');
+    assert.ok(
+      !stub.calls[1].models.includes('big/model:free'),
+      'must ask a different model'
+    );
+    assert.equal(findings.findings.length, 1, 'the second opinion is kept');
+    assert.match(stdout, /confirming with/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a batch with findings costs no second opinion', async () => {
+  const stub = await startStub({
+    replies: [
+      { content: JSON.stringify({ summary: 's', findings: [goodFinding] }) },
+    ],
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    assert.equal(stub.calls.length, 1, 'only empty batches pay');
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('SECOND_OPINION=0 keeps the empty result without a second call', async () => {
+  const stub = await startStub({
+    replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }],
+  });
+  try {
+    const { findings } = await runReview(stub, {
+      rules: RULES_FILE,
+      env: { SECOND_OPINION: '0' },
+    });
+    assert.equal(stub.calls.length, 1);
+    assert.deepEqual(findings.findings, []);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a recovered batch that finds nothing is a real answer, not inconclusive', async () => {
+  const stub = await startStub({
+    replies: [
+      { content: 'no json here' },
+      { content: JSON.stringify({ summary: 'clean', findings: [] }) },
+    ],
+  });
+  try {
+    const { findings } = await runReview(stub, { rules: RULES_FILE });
+    assert.equal(findings.reviewed, true);
+    assert.equal(findings.inconclusive, undefined);
   } finally {
     stub.server.close();
   }
@@ -529,7 +650,7 @@ test('the request budget is respected and what was dropped is reported', async (
     const { findings, stdout } = await runReview(stub, {
       diff: many,
       rules: RULES_FILE,
-      env: { MAX_REQUESTS: '2' },
+      env: { MAX_REQUESTS: '2', SECOND_OPINION: '0' },
     });
     assert.equal(stub.calls.length, 2, 'never exceeds the request budget');
     assert.match(stdout, /Skipped \(request cap\)/);
@@ -551,6 +672,20 @@ test('the fallback chain is sent so OpenRouter can reroute on rate limits', asyn
     );
     assert.ok(stub.calls[0].models.length > 1, 'needs at least one fallback');
     assert.equal(stub.calls[0].temperature, 0.1);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('repetition loops are discouraged and cut off at the provider', async () => {
+  const stub = await startStub({
+    replies: [{ content: JSON.stringify({ summary: 's', findings: [] }) }],
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    assert.ok(stub.calls[0].frequency_penalty > 0);
+    // Without this the whitespace flood bills all the way to max_tokens.
+    assert.deepEqual(stub.calls[0].stop, ['\n\n\n\n']);
   } finally {
     stub.server.close();
   }
@@ -581,10 +716,283 @@ test('JSON mode is only requested when every model in the chain supports it', as
   });
   try {
     await runReview(allStructured, { rules: RULES_FILE });
-    assert.deepEqual(allStructured.calls[0].response_format, {
-      type: 'json_object',
-    });
+    assert.equal(
+      allStructured.calls[0].response_format.type,
+      'json_schema',
+      'a fully structured chain gets the strict schema, not bare json_object'
+    );
   } finally {
     allStructured.server.close();
+  }
+});
+
+test('a non-reasoning model outranks a reasoning one at equal capability', () => {
+  // The regression this locks in: deepseek-v4-pro spent 4000 of 4001 completion
+  // tokens reasoning and replied "No diff was provided for review."
+  const ranked = rankModels([
+    { id: 'thinker:v1', context: 1000000, structured: true, reasoning: true },
+    { id: 'answerer:v1', context: 262144, structured: true, reasoning: false },
+  ]);
+  assert.equal(ranked[0].id, 'answerer:v1');
+});
+
+test('structured output still outranks non-reasoning', () => {
+  const ranked = rankModels([
+    { id: 'plain:v1', context: 262144, structured: false, reasoning: false },
+    { id: 'thinker:v1', context: 262144, structured: true, reasoning: true },
+  ]);
+  assert.equal(
+    ranked[0].id,
+    'thinker:v1',
+    'JSON support is the harder constraint'
+  );
+});
+
+test('pins the reply shape with a strict json_schema, not bare json_object', async () => {
+  // Regression: `json_object` only guarantees valid JSON, not field names. A
+  // model replied with `rule_id` instead of `ruleId` and all five findings were
+  // discarded as "invented rule id undefined".
+  const stub = await startStub({
+    replies: [{ content: OBJ }],
+    models: LIVE_CHAIN,
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    const [call] = stub.calls;
+    assert.equal(call.response_format.type, 'json_schema');
+    assert.equal(call.response_format.json_schema.strict, true);
+    const props = call.response_format.json_schema.schema.properties;
+    assert.ok(props.findings.items.required.includes('ruleId'));
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('every request asks the provider not to reason', async () => {
+  // deepseek-v4-pro spent 4000 of 4001 completion tokens reasoning and returned
+  // the single line "No diff was provided for review." — the diff had been sent
+  // (prompt_tokens 1978), the reply was simply truncated away.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    assert.ok(stub.calls.length > 0);
+    for (const call of stub.calls)
+      assert.deepEqual(call.reasoning, { enabled: false });
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a finding keyed rule_id survives instead of being thrown away', async () => {
+  const snake = JSON.stringify({
+    summary: 'x',
+    findings: [
+      {
+        rule_id: 'SEC-001',
+        path: 'src/a.ts',
+        line_number: 2,
+        level: 'major',
+        score: 0.9,
+        message: 'hardcoded secret',
+        description: 'move it to an env var',
+      },
+    ],
+  });
+  const stub = await startStub({ replies: [{ content: snake }] });
+  try {
+    const { findings } = await runReview(stub, { rules: RULES_FILE });
+    assert.equal(findings.findings.length, 1);
+    assert.equal(findings.findings[0].ruleId, 'SEC-001');
+    assert.equal(findings.findings[0].file, 'src/a.ts');
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('findings outside src/ are rejected unless the rule is SEC or PHI', async () => {
+  // The rulebook scopes rules to src/**, but prose in a prompt is advisory —
+  // a live run reported STD findings on .github/** anyway. Enforced in code.
+  const ciDiff = `diff --git a/.github/scripts/deploy.mjs b/.github/scripts/deploy.mjs
+index 111..222 100644
+--- a/.github/scripts/deploy.mjs
++++ b/.github/scripts/deploy.mjs
+@@ -1,2 +1,4 @@
+ const x = 1;
++console.log(x);
++const token = 'hardcoded';
+`;
+  const reply = JSON.stringify({
+    summary: 'x',
+    findings: [
+      {
+        ruleId: 'STD-008',
+        file: '.github/scripts/deploy.mjs',
+        line: 2,
+        severity: 'major',
+        confidence: 0.9,
+        title: 'console in tooling — out of scope',
+        body: 'b',
+      },
+      {
+        ruleId: 'SEC-001',
+        file: '.github/scripts/deploy.mjs',
+        line: 3,
+        severity: 'blocker',
+        confidence: 0.9,
+        title: 'a credential is in scope anywhere',
+        body: 'b',
+      },
+    ],
+  });
+  const stub = await startStub({ replies: [{ content: reply }] });
+  try {
+    const { findings } = await runReview(stub, {
+      diff: ciDiff,
+      rules: RULES_FILE,
+    });
+    assert.equal(findings.findings.length, 1);
+    assert.equal(findings.findings[0].ruleId, 'SEC-001');
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the model is no longer asked for suggestion blocks', async () => {
+  // Models filled ```suggestion fences with prose; applying one would commit
+  // a sentence into source. Dropped — also most of the paid output tokens.
+  const stub = await startStub({
+    replies: [{ content: OBJ }],
+    models: LIVE_CHAIN,
+  });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    const [call] = stub.calls;
+    const props =
+      call.response_format.json_schema.schema.properties.findings.items;
+    assert.ok(!('suggestion' in props.properties));
+    assert.ok(!props.required.includes('suggestion'));
+    assert.match(call.messages.at(-1).content, /ONE sentence/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('requests route to the cheapest provider', async () => {
+  // Two identical runs billed ~70% apart per token — same model id, different
+  // provider behind it. Input is ~99% of this workload's tokens.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    for (const call of stub.calls)
+      assert.deepEqual(call.provider, { sort: 'price' });
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the debug artifact holds the full request and response per batch', async () => {
+  // The Slack digest shows truncated previews; the artifact is the full
+  // fidelity copy. Without it, debugging a bad reply means re-running the PR.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    const { debug } = await runReview(stub, { rules: RULES_FILE });
+    const [batch] = debug.debug;
+    assert.ok(batch.request.messages.length >= 2);
+    assert.match(batch.request.messages.at(-1).content, /DIFF/);
+    assert.equal(batch.response, OBJ);
+    assert.ok(
+      !JSON.stringify(batch.request).includes('stub-key'),
+      'the API key must never reach the artifact'
+    );
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the debug artifact records what the key was actually billed', async () => {
+  // Per-request cost sums miss repair calls and unsettled accounting. The
+  // key's usage delta, straight from OpenRouter, is the source of truth.
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    const { debug } = await runReview(stub, { rules: RULES_FILE });
+    assert.ok(debug.account);
+    assert.equal(debug.account.billed, 0.005);
+    assert.equal(debug.account.after, 1.005);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('every request asks OpenRouter to include its accounting', async () => {
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, { rules: RULES_FILE });
+    for (const call of stub.calls)
+      assert.deepEqual(call.usage, { include: true });
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('test bodies are withheld but their names are sent', async () => {
+  const mixed =
+    'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1,2 @@\n+const y = 2;\n' +
+    'diff --git a/src/test/a.test.ts b/src/test/a.test.ts\n--- a/src/test/a.test.ts\n+++ b/src/test/a.test.ts\n@@ -1 +1,2 @@\n+expect(sekritTestBody).toBe(1);\n';
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, {
+      diff: mixed,
+      rules: RULES_FILE,
+      env: { SECOND_OPINION: '0' },
+    });
+    assert.equal(stub.calls.length, 1);
+    const sent = stub.calls[0].messages.at(-1).content;
+    assert.ok(!sent.includes('sekritTestBody'), 'the body must not be sent');
+    assert.match(sent, /src\/test\/a\.test\.ts/, 'the name must be sent');
+    assert.match(sent, /const y = 2/, 'application code still reviewed');
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a tests-only PR passes cleanly instead of reporting inconclusive', async () => {
+  const testsOnly =
+    'diff --git a/src/test/a.test.ts b/src/test/a.test.ts\n--- a/src/test/a.test.ts\n+++ b/src/test/a.test.ts\n@@ -1 +1,2 @@\n+expect(1).toBe(1);\n';
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    const { findings } = await runReview(stub, {
+      diff: testsOnly,
+      rules: RULES_FILE,
+    });
+    assert.equal(stub.calls.length, 0, 'must not spend a request');
+    assert.equal(findings.reviewed, true, 'must not wedge the merge');
+    assert.equal(findings.inconclusive, undefined);
+    assert.match(findings.summary, /only unit-test files changed/i);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('the PR description never reaches the model, template or not', async () => {
+  const template = [
+    '# Pull Request',
+    '<!-- Provide a brief description of the changes in this PR -->',
+    'fixes the visit export off-by-one',
+    '- [ ] Bug fix (non-breaking change which fixes an issue)',
+    '- [x] Test updates',
+  ].join('\n');
+  const stub = await startStub({ replies: [{ content: OBJ }] });
+  try {
+    await runReview(stub, {
+      rules: RULES_FILE,
+      env: { PR_BODY: template },
+    });
+    const sent = stub.calls[0].messages.at(-1).content;
+    assert.ok(!sent.includes('DESCRIPTION'));
+    assert.ok(!sent.includes('fixes the visit export off-by-one'));
+    assert.ok(!sent.includes('<!--'));
+    assert.ok(!sent.includes('- [ ]'));
+  } finally {
+    stub.server.close();
   }
 });

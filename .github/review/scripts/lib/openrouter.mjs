@@ -44,6 +44,25 @@ export function splitDiffByFile(diff) {
 }
 
 /**
+ * Is this a unit-test file rather than application code?
+ *
+ * Test bodies are the bulk of a typical PR here and the least rewarding thing
+ * to spend input tokens on: a table-driven suite is hundreds of near-identical
+ * lines, which is also what sends a model into a repetition loop. Their names
+ * still travel with the prompt, so TEST-001/002 ("fix with no regression test")
+ * stay answerable without paying for the bodies.
+ *
+ * @param {string} path
+ */
+export function isTestFile(path) {
+  return (
+    /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ||
+    /(^|\/)__(tests|mocks)__\//.test(path) ||
+    /(^|\/)tests?\//.test(path)
+  );
+}
+
+/**
  * Pack per-file diffs into as few requests as possible without blowing the
  * context window.
  *
@@ -152,50 +171,65 @@ export function extractJson(text) {
       if (depth === 0) return attempt(s.slice(start, i + 1));
     }
   }
-  return null;
+  return salvageJson(s.slice(start));
 }
 
-/**
- * Compact one-line-per-rule digest for the prompt.
+/*
+ * Close a reply that ran out of output budget before it closed its brackets.
  *
- * The full rulebook is ~14 KB of prose. Sending it on every request would eat
- * the context budget a free model needs for the actual diff, so the model gets
- * IDs, severities and titles, and the prose stays as documentation for humans.
+ * Under `json_schema` the decoder is grammar-constrained, but JSON permits
+ * unlimited whitespace between tokens — so an emitted `{"findings": []` may be
+ * followed by thousands of newlines until max_tokens, legally, and the object
+ * never closes. Observed repeatedly on one file in PR #309: 8000 completion
+ * tokens, 255k chars, no `}`. A penalty only shifts the odds of a legal token;
+ * it cannot forbid it, which is why this must be recoverable rather than merely
+ * discouraged.
  *
- * Muted rules are omitted entirely — that is how the feedback loop's mute
- * decision reaches the model. On an exploration slot a muted rule is put back,
- * so it can still earn its way out of the mute.
- *
- * @param {Record<string, {title:string, severity:string, state:string}>} rules
- * @param {(ruleId:string)=>boolean} isExploring
- * @returns {{digest:string, included:string[], exploring:string[]}}
+ * The bytes the model did emit are its real answer. Drop the whitespace flood,
+ * shut any string and bracket still open, and parse what is left.
  */
-export function buildRulesDigest(rules, isExploring = () => false) {
-  const lines = [];
-  const included = [];
-  const exploring = [];
+export function salvageJson(text) {
+  const stack = [];
+  let out = '';
+  let inString = false;
+  let escaped = false;
 
-  for (const [id, rule] of Object.entries(rules)) {
-    if (rule.state === 'muted') {
-      if (!isExploring(id)) continue;
-      exploring.push(id);
+  for (const c of text) {
+    if (inString) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
     }
-    const note =
-      rule.state === 'probation'
-        ? ' (only report at blocker/major severity)'
-        : '';
-    lines.push(`${id} [${rule.severity}] ${rule.title}${note}`);
-    included.push(id);
+    if (/\s/.test(c)) continue;
+    out += c;
+    if (c === '"') inString = true;
+    else if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']');
+    else if (c === '}' || c === ']') stack.pop();
   }
 
-  return { digest: lines.join('\n'), included, exploring };
+  if (inString) out += '"';
+  // A dangling `,` or `:` is the start of a value that never arrived.
+  out = out.replace(/[,:]+$/, '');
+  while (stack.length) out += stack.pop();
+
+  try {
+    const parsed = JSON.parse(out);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Rank candidate models best-first: structured-output support, then context.
  *
- * The whole pipeline depends on the reply parsing as strict JSON, and most free
- * models cannot guarantee that. Ranking on context alone puts a large-context
+ * Structured output first, then non-reasoning, then context. The pipeline needs
+ * strict JSON in a bounded reply; a reasoning model can spend the whole output
+ * budget thinking and return a truncated fragment. Ranking on context alone puts a large-context
  * model that rambles ahead of a smaller one that answers in the required shape,
  * and the rambling one then wins the chain and returns nothing usable.
  *
@@ -204,7 +238,9 @@ export function buildRulesDigest(rules, isExploring = () => false) {
 export function rankModels(models) {
   return [...models].sort(
     (a, b) =>
-      Number(b.structured) - Number(a.structured) || b.context - a.context
+      Number(b.structured) - Number(a.structured) ||
+      Number(a.reasoning) - Number(b.reasoning) ||
+      b.context - a.context
   );
 }
 
@@ -234,6 +270,10 @@ export async function listModels(apiKey) {
         structured: (m.supported_parameters || []).includes(
           'structured_outputs'
         ),
+        // Reasoning models spend the output budget thinking before replying, so
+        // they need far more headroom for the same answer. Rank them below an
+        // equally capable non-reasoning model rather than excluding them.
+        reasoning: (m.supported_parameters || []).includes('reasoning'),
         free:
           m.id.endsWith(':free') ||
           (Number(m.pricing?.prompt) === 0 &&
@@ -269,9 +309,21 @@ export function chooseModels(
   for (const id of preferred) {
     if (byId.has(id)) chain.push(byId.get(id));
   }
-  // Only free models auto-fill. Paid ones must be named.
+  /*
+   * Only free models auto-fill. Paid ones must be named.
+   *
+   * An auto-filled model must not cost the chain its JSON schema. `jsonMode` is
+   * `chain.every(m => m.structured)`, so one model without structured outputs
+   * disables the schema for every model ahead of it — including a paid primary
+   * that was named precisely to get it. The free catalogue churns weekly, so
+   * without this the chain silently loses schema enforcement the week an
+   * unlucky model happens to rank highest.
+   */
+  const namedAreStructured =
+    chain.length > 0 && chain.every(m => m.structured);
   for (const m of available.filter(m => m.free !== false)) {
     if (chain.length >= limit) break;
+    if (namedAreStructured && !m.structured) continue;
     if (!chain.some(c => c.id === m.id)) chain.push(m);
   }
   return chain.slice(0, limit);
@@ -285,7 +337,8 @@ export function chooseModels(
  * hit. Retries here are only for transport-level problems.
  *
  * @param {{apiKey:string, models:string[], system:string, user:string,
- *          maxTokens?:number, jsonMode?:boolean, retries?:number,
+ *          maxTokens?:number, jsonMode?:boolean, schema?:object|null,
+ *          disableReasoning?:boolean, retries?:number,
  *          referer?:string, title?:string}} opts
  * @returns {Promise<{text:string, model:string, usage:object|null}>}
  */
@@ -297,6 +350,8 @@ export async function complete(opts) {
     user,
     maxTokens = 4000,
     jsonMode = false,
+    schema = null,
+    disableReasoning = true,
     retries = 2,
     referer = 'https://github.com',
     title = 'PR Review Agent',
@@ -312,9 +367,53 @@ export async function complete(opts) {
     ],
     temperature: 0.1,
     max_tokens: maxTokens,
+    frequency_penalty: 0.4,
+    /*
+     * Cut the whitespace runaway at the provider instead of paying for it to
+     * reach max_tokens. Pretty-printed JSON never contains a blank line, let
+     * alone four, so this cannot truncate a healthy reply — and salvageJson
+     * closes whatever the stop leaves open.
+     */
+    stop: ['\n\n\n\n'],
+    // Ask for OpenRouter's own accounting in every reply, rather than relying
+    // on the provider including it by default.
+    usage: { include: true },
   };
   if (chain.length > 1) body.models = chain;
-  if (jsonMode) body.response_format = { type: 'json_object' };
+
+  /*
+   * One model id is served by several providers at different prices, and the
+   * default routing balances price against uptime. Two identical runs came
+   * back ~70% apart per token because of it. Input tokens are ~99% of this
+   * workload, so the provider's rate is effectively the whole bill.
+   */
+  body.provider = { sort: 'price' };
+  /*
+   * `json_object` guarantees syntactically valid JSON and nothing else — the
+   * model is free to name the keys whatever it likes. Observed in production:
+   * a reply keyed `rule_id` instead of `ruleId` parsed cleanly, then every
+   * finding was thrown away as "invented rule id undefined". `json_schema`
+   * with strict:true is what actually pins the field names down.
+   */
+  if (schema && jsonMode) {
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: { name: 'review_findings', strict: true, schema },
+    };
+  } else if (jsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
+
+  /*
+   * Reading a diff and emitting findings against a fixed rulebook is
+   * pattern-matching, not multi-step deduction — there is nothing here for a
+   * chain of thought to work out. Left on, a reasoning model spends the whole
+   * output budget thinking and returns a truncated fragment: deepseek-v4-pro
+   * burned 4000 of 4001 completion tokens and replied "No diff was provided
+   * for review." OpenRouter normalises this across providers and ignores it on
+   * models that cannot reason, so it is safe to send unconditionally.
+   */
+  if (disableReasoning) body.reasoning = { enabled: false };
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -337,6 +436,10 @@ export async function complete(opts) {
         lastErr = new Error(
           `POST /chat/completions -> ${res.status}: ${text.slice(0, 400)}`
         );
+        // A 401/402/400 will never succeed on a retry, and retrying it burns
+        // requests against a daily cap. Mark it so the catch below rethrows
+        // instead of sleeping and trying the same doomed request again.
+        if (!retryable) lastErr.fatal = true;
         if (!retryable || attempt === retries) throw lastErr;
         const wait =
           Number(res.headers.get('retry-after')) * 1000 || 2 ** attempt * 4000;
@@ -354,10 +457,16 @@ export async function complete(opts) {
         text: json.choices?.[0]?.message?.content ?? '',
         model: json.model || chain[0],
         usage: json.usage || null,
+        // The exact body sent, for the debug artifact. The API key travels in
+        // a header, never in the body, so this is safe to persist.
+        request: body,
       };
     } catch (err) {
       lastErr = err;
-      if (attempt === retries) throw lastErr;
+      lastErr.request = body;
+      // The non-retryable throw above lands here too, so honour it — otherwise
+      // every 4xx is retried the full count before failing identically.
+      if (err.fatal || attempt === retries) throw lastErr;
       await new Promise(r => setTimeout(r, 2 ** attempt * 2000));
     }
   }
