@@ -267,6 +267,92 @@ test('a fixed finding queues its thread for resolution; a live one never does', 
   }
 });
 
+test('a live finding on a stale thread is re-anchored: reposted and the old thread superseded', async () => {
+  // The prior comment matches the current finding (rule+file), so it is
+  // standing — but its open thread is outdated and carries no anchor, meaning
+  // it points at code that changed. Expect: a fresh inline comment AND the
+  // stale thread queued for resolution as superseded.
+  const existing = [
+    {
+      id: 300,
+      user: { login: 'github-actions[bot]', type: 'Bot' },
+      path: 'src/a.ts',
+      body: 'old\n<!-- ih-tek-review rule=SEC-001 fid=old sev=blocker conf=0.9 -->',
+    },
+  ];
+  const stub = await startStub({
+    existingComments: existing,
+    threads: [
+      {
+        id: 'T_stale',
+        isResolved: false,
+        isOutdated: true,
+        path: 'src/a.ts',
+        comments: {
+          nodes: [
+            {
+              databaseId: 300,
+              author: { login: 'github-actions' },
+              body: 'old\n<!-- ih-tek-review rule=SEC-001 fid=old sev=blocker conf=0.9 -->',
+            },
+          ],
+        },
+      },
+    ],
+  });
+  try {
+    const { stdout } = await runPostReview(findingsPayload([base]), stub);
+    assert.match(stdout, /1 re-anchored/);
+    assert.match(stdout, /queued for resolution \(1 superseded by a re-anchor\)/);
+    const review = stub.requests.find(
+      r => r.method === 'POST' && r.url.includes('/reviews')
+    );
+    assert.ok(review, 'the re-anchored comment must be posted');
+    assert.equal(review.body.comments.length, 1);
+    assert.equal(review.body.comments[0].line, 2);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a live finding whose thread still anchors real code stays quiet', async () => {
+  const existing = [
+    {
+      id: 301,
+      user: { login: 'github-actions[bot]', type: 'Bot' },
+      path: 'src/a.ts',
+      body: 'old\n<!-- ih-tek-review rule=SEC-001 fid=old sev=blocker conf=0.9 -->',
+    },
+  ];
+  const stub = await startStub({
+    existingComments: existing,
+    threads: [
+      {
+        id: 'T_current',
+        isResolved: false,
+        isOutdated: false,
+        path: 'src/a.ts',
+        comments: {
+          nodes: [
+            {
+              databaseId: 301,
+              author: { login: 'github-actions' },
+              body: 'old\n<!-- ih-tek-review rule=SEC-001 fid=old sev=blocker conf=0.9 -->',
+            },
+          ],
+        },
+      },
+    ],
+  });
+  try {
+    const { stdout } = await runPostReview(findingsPayload([base]), stub);
+    assert.match(stdout, /No new findings since the last run/);
+    assert.match(stdout, /0 thread\(s\) queued/);
+  } finally {
+    stub.server.close();
+  }
+});
+
 test('an incomplete run queues nothing for resolution', async () => {
   const stub = await startStub({
     threads: [

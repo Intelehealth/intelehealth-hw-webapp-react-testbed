@@ -300,6 +300,36 @@ async function main() {
   }
   console.log(`${priors.length} prior finding(s) recorded on this PR.`);
 
+  // The bot's own OPEN threads, for two decisions: which stale threads a
+  // still-live finding should supersede, and which threads a dead finding
+  // should resolve. Failure degrades to "no thread knowledge" — everything
+  // still posts and gates; nothing resolves.
+  let openThreads = [];
+  try {
+    for (const t of await getReviewThreads(REPO, PR_NUMBER)) {
+      if (t.isResolved) continue;
+      const root = t.comments?.nodes?.[0];
+      const login = root?.author?.login || '';
+      if (!/\[bot\]$|^github-actions$/.test(login)) continue;
+      const body = root.body || '';
+      if (!body.includes(`<!-- ${MARKER} `)) continue;
+      const rule = /rule=([A-Z]+-\d+)/.exec(body)?.[1];
+      if (!rule) continue;
+      openThreads.push({
+        threadId: t.id,
+        commentId: root.databaseId,
+        isOutdated: t.isOutdated === true,
+        path: t.path,
+        rule,
+        bid: /\bbid=([a-z0-9]+)/.exec(body)?.[1] || null,
+        ah: /\bah=([a-z0-9]+)/.exec(body)?.[1] || null,
+      });
+    }
+  } catch (err) {
+    console.error(`Could not list review threads: ${err.message}`);
+    openThreads = [];
+  }
+
   // The commit the last complete review actually read, from the summary
   // marker. Absent on a first review — then everything is in scope.
   let lastSha = null;
@@ -353,9 +383,32 @@ async function main() {
     return sources.get(f.file);
   };
 
+  // A standing finding normally stays quiet — but when its open thread
+  // anchors code that no longer exists, the thread is a stale signpost: the
+  // developer sees an outdated conversation and no comment at the actual
+  // location. Re-anchor it: post the finding fresh at its current line, and
+  // queue the stale thread to be resolved with a note pointing forward. One
+  // open thread per live finding, always on current code.
+  const currentHashes = new Map();
+  const hashesOf = path => {
+    if (!currentHashes.has(path)) currentHashes.set(path, fileLineHashes(path));
+    return currentHashes.get(path);
+  };
+  const staleThreadFor = f => {
+    const t =
+      openThreads.find(x => x.bid && x.bid === f._bucket) ||
+      openThreads.find(x => x.rule === f.ruleId && x.path === f.file);
+    if (!t) return null;
+    const anchorGone = t.ah
+      ? !hashesOf(t.path)?.has(t.ah)
+      : t.isOutdated === true;
+    return anchorGone ? t : null;
+  };
+
   const standing = [];
   const fresh = [];
   const outOfScope = [];
+  const reposts = [];
   for (const f of valid) {
     const { bucket, anchor } = identify(f, sourceFor(f));
     f._bucket = bucket;
@@ -366,6 +419,11 @@ async function main() {
     // suppresses a duplicate comment; the fine side reposts forever.
     if (priorBids.has(bucket) || priorRuleFile.has(`${f.ruleId}|${f.file}`)) {
       standing.push(f);
+      const stale = staleThreadFor(f);
+      if (stale) {
+        f._supersedes = stale;
+        reposts.push(f);
+      }
       continue;
     }
     if (ranges) {
@@ -386,7 +444,9 @@ async function main() {
     fresh.push(f);
   }
   console.log(
-    `${standing.length} standing, ${fresh.length} new, ${outOfScope.length} out of scope.`
+    `${standing.length} standing, ${fresh.length} new, ${outOfScope.length} out of scope` +
+      (reposts.length ? `, ${reposts.length} re-anchored` : '') +
+      '.'
   );
   for (const f of outOfScope) {
     console.log(
@@ -420,8 +480,29 @@ async function main() {
   for (const file of files)
     lineIndex.set(file.filename, commentableLines(file.patch));
 
+  // Re-anchored findings post alongside the genuinely new ones. A repost that
+  // cannot land inline (its current line is outside the diff) is skipped and
+  // its stale thread left open — a stale anchor beats no anchor at all.
+  const superseded = [];
   const inline = [];
   const outOfDiff = [];
+  for (const f of reposts) {
+    const allowed = lineIndex.get(f.file);
+    if (!allowed || !allowed.has(f.line)) continue;
+    inline.push({
+      path: f.file,
+      line: f.line,
+      side: 'RIGHT',
+      body: commentBody(f),
+    });
+    superseded.push({
+      threadId: f._supersedes.threadId,
+      commentId: f._supersedes.commentId,
+      rule: f.ruleId,
+      path: f._supersedes.path,
+      reason: 'superseded',
+    });
+  }
   for (const f of kept) {
     const allowed = lineIndex.get(f.file);
     if (!allowed || !allowed.has(f.line)) {
@@ -463,14 +544,12 @@ async function main() {
     ruleCount,
   });
 
-  // Whatever else happens, always leave the resolve plan for the follow-up
-  // job — an empty one when the run was incomplete, because "the model did
-  // not look" must never read as "the finding is gone".
-  await writeResolvePlan({ incomplete, standing, fresh });
-
-  // Nothing new to say and something already said: stay quiet.
+  // Nothing new to say and something already said: stay quiet. Fixed threads
+  // still resolve — the plan carries no superseded entries here because there
+  // was nothing to repost.
   if (inline.length === 0 && outOfDiff.length === 0 && priors.length > 0) {
     console.log('No new findings since the last run. Not posting.');
+    writeResolvePlan({ incomplete, standing, fresh, openThreads, superseded: [] });
     applyMergeGate(blocking, incomplete);
     return;
   }
@@ -480,6 +559,7 @@ async function main() {
     JSON.stringify({ inline, outOfDiff, dropped }, null, 2)
   );
 
+  let postedInline = false;
   try {
     await createReview(REPO, PR_NUMBER, {
       commitId: HEAD_SHA,
@@ -490,6 +570,7 @@ async function main() {
           : 'COMMENT',
       comments: inline,
     });
+    postedInline = true;
     console.log(`Posted a review with ${inline.length} inline comment(s).`);
   } catch (err) {
     // The review API is all-or-nothing. Rather than lose the whole review to
@@ -515,6 +596,16 @@ async function main() {
     }
   }
 
+  // A stale thread is resolved only once its replacement comment is live —
+  // if the inline post failed, the old thread stays as the finding's anchor.
+  writeResolvePlan({
+    incomplete,
+    standing,
+    fresh,
+    openThreads,
+    superseded: postedInline ? superseded : [],
+  });
+
   applyMergeGate(blocking, incomplete);
 }
 
@@ -536,7 +627,7 @@ async function main() {
  * Anything ambiguous stays open. An open thread on fixed code is one click of
  * noise; a resolved thread on an unfixed defect is a buried bug.
  */
-async function writeResolvePlan({ incomplete, standing, fresh }) {
+function writeResolvePlan({ incomplete, standing, fresh, openThreads, superseded }) {
   const plan = [];
   if (!incomplete) {
     const live = [...standing, ...fresh];
@@ -548,39 +639,30 @@ async function writeResolvePlan({ incomplete, standing, fresh }) {
       return hashesByFile.get(path);
     };
 
-    try {
-      for (const t of await getReviewThreads(REPO, PR_NUMBER)) {
-        if (t.isResolved) continue;
-        const root = t.comments?.nodes?.[0];
-        const login = root?.author?.login || '';
-        if (!/\[bot\]$|^github-actions$/.test(login)) continue;
-        const body = root.body || '';
-        if (!body.includes(`<!-- ${MARKER} `)) continue;
+    for (const t of openThreads) {
+      // A live finding keeps its thread open — unless the thread was just
+      // superseded by a re-anchored comment at the code's current location.
+      if (t.bid && liveBids.has(t.bid)) continue;
+      if (liveRuleFile.has(`${t.rule}|${t.path}`)) continue;
+      // The recorded line content must actually be gone from the file.
+      if (t.ah && hashesFor(t.path)?.has(t.ah)) continue;
 
-        const rule = /rule=([A-Z]+-\d+)/.exec(body)?.[1];
-        if (!rule) continue;
-        const bid = /\bbid=([a-z0-9]+)/.exec(body)?.[1];
-        const ah = /\bah=([a-z0-9]+)/.exec(body)?.[1];
-
-        if (bid && liveBids.has(bid)) continue;
-        if (liveRuleFile.has(`${rule}|${t.path}`)) continue;
-        // The recorded line content must actually be gone from the file.
-        if (ah && hashesFor(t.path)?.has(ah)) continue;
-
-        plan.push({
-          threadId: t.id,
-          commentId: root.databaseId,
-          rule,
-          path: t.path,
-        });
-      }
-    } catch (err) {
-      console.error(`Could not compute the resolve plan: ${err.message}`);
-      plan.length = 0;
+      plan.push({
+        threadId: t.threadId,
+        commentId: t.commentId,
+        rule: t.rule,
+        path: t.path,
+        reason: 'fixed',
+      });
     }
+    plan.push(...superseded);
   }
   writeFileSync('.claude-review/resolve-plan.json', JSON.stringify(plan, null, 2));
-  console.log(`${plan.length} thread(s) queued for resolution.`);
+  console.log(
+    `${plan.length} thread(s) queued for resolution` +
+      (superseded.length ? ` (${superseded.length} superseded by a re-anchor)` : '') +
+      '.'
+  );
 }
 
 /**
