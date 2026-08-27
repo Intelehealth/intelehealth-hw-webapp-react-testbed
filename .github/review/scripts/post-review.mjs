@@ -73,6 +73,20 @@ const BLOCK_MIN_SEVERITY = process.env.BLOCK_MIN_SEVERITY || 'nit';
  */
 const REQUIRE_COMPLETE_REVIEW = process.env.REQUIRE_COMPLETE_REVIEW !== '0';
 
+/**
+ * Convergence guard: after this many review rounds on one PR, only a `blocker`
+ * may open a NEW thread. Everything else is listed advisory-only.
+ *
+ * Every real fix adds code, and new code is legitimately in scope, so a
+ * reviewer with no round limit can always find something else — measured on
+ * testbed#23, three consecutive fix rounds each produced fresh findings, and by
+ * the third they were a style opinion and an outright false positive (a "race
+ * condition" on a single-threaded increment). A developer who fixes everything
+ * asked of them must be able to finish. Standing findings are unaffected: this
+ * caps what can be newly *opened*, never what is already known to be wrong.
+ */
+const MAX_NEW_FINDING_ROUNDS = Number(process.env.MAX_NEW_FINDING_ROUNDS || 3);
+
 const SEVERITY_LABEL = {
   blocker: '🔴 Blocker',
   major: '🟠 Major',
@@ -133,6 +147,7 @@ function summaryBody({
   dropped,
   outOfDiff,
   outOfScope,
+  deferred = [],
   invalid,
   ruleCount,
 }) {
@@ -171,6 +186,26 @@ function summaryBody({
     for (const f of outOfDiff) {
       lines.push(`- **${f.ruleId}** \`${f.file}:${f.line}\` — ${f.title}`);
     }
+  }
+
+  if (deferred.length) {
+    lines.push(
+      '',
+      '<details><summary>' +
+        deferred.length +
+        ' further finding(s) — advisory only, not blocking</summary>',
+      '',
+      'This pull request has been through several review rounds. To let it converge,',
+      'only blockers open new threads from here; these are recorded for judgement',
+      'rather than raised as conversations.',
+      ''
+    );
+    for (const f of deferred) {
+      lines.push(
+        `- \`${f.ruleId}\` ${f.file}:${f.line} — ${f.title}`
+      );
+    }
+    lines.push('', '</details>');
   }
 
   if (outOfScope.length) {
@@ -335,13 +370,17 @@ async function main() {
   // The commit the last complete review actually read, from the summary
   // marker. Absent on a first review — then everything is in scope.
   let lastSha = null;
+  let rounds = 0;
   try {
     for (const review of await getReviews(REPO, PR_NUMBER)) {
       if (!isBot(review.user)) continue;
       const m = new RegExp(`<!-- ${MARKER} summary sha=([0-9a-f]{7,40}) -->`).exec(
         review.body || ''
       );
-      if (m) lastSha = m[1];
+      if (m) {
+        lastSha = m[1];
+        rounds++;
+      }
     }
   } catch (err) {
     console.error(`Could not read prior reviews: ${err.message}`);
@@ -457,6 +496,25 @@ async function main() {
     );
   }
 
+  /*
+   * Convergence guard. Past the round budget, only a blocker may open a new
+   * thread; the rest are reported advisory-only in the summary so nothing is
+   * hidden, but the developer is no longer handed a fresh list every time they
+   * fix the last one. Standing findings still count and still block.
+   */
+  const deferred = [];
+  if (rounds >= MAX_NEW_FINDING_ROUNDS && fresh.length) {
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      if (fresh[i].severity !== 'blocker') deferred.push(...fresh.splice(i, 1));
+    }
+    if (deferred.length) {
+      console.log(
+        `Round ${rounds + 1} of review: deferring ${deferred.length} non-blocker ` +
+          `finding(s) to advisory so this PR can converge.`
+      );
+    }
+  }
+
   // --- gate ----------------------------------------------------------------
   const { kept, dropped } = gateFindings(fresh, {
     alreadyPosted: new Set(),
@@ -543,6 +601,7 @@ async function main() {
     dropped,
     outOfDiff,
     outOfScope,
+    deferred,
     invalid,
     ruleCount,
   });
