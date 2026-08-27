@@ -22,10 +22,11 @@ jobs:
   probe:
     if: github.event.label.name == 'resolve-probe'
     runs-on: ubuntu-latest
-    # Deliberately identical to pr-review.yml — the point is to test the real
-    # permission set, not a generous one.
+    # Round 2. Round 1 used the pr-review.yml set (contents: read) and got
+    # FORBIDDEN "Resource not accessible by integration". Escalating only
+    # contents to write isolates whether that is the missing grant.
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
       issues: write
     steps:
