@@ -1,3 +1,7 @@
+/**
+ * Schedules appointment reminders through the reminders API.
+ */
+
 interface Reminder {
   id: string;
   patientId: string;
@@ -6,6 +10,7 @@ interface Reminder {
 }
 
 const REMINDERS_ENDPOINT = '/api/reminders';
+const REMINDER_PREVIEW_LENGTH = 40;
 
 export const scheduleReminder = async (reminder: Reminder) => {
   const response = await fetch(REMINDERS_ENDPOINT, {
@@ -13,13 +18,14 @@ export const scheduleReminder = async (reminder: Reminder) => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(reminder),
   });
-  const payload = await response.json();
-  console.log('scheduled reminder', payload.id);
-  return payload;
+  if (!response.ok) {
+    throw new Error(`Reminder scheduling failed: ${response.status}`);
+  }
+  return response.json();
 };
 
 export const formatReminderLabel = (reminder: Reminder) => {
-  const preview = reminder.message!.slice(0, 40);
+  const preview = (reminder.message ?? '').slice(0, REMINDER_PREVIEW_LENGTH);
   return `${reminder.sendAt} — ${preview}`;
 };
 
