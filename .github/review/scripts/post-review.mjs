@@ -122,7 +122,7 @@ function commentBody(f) {
   parts.push(
     '',
     `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} bid=${f._bucket}` +
-      `${f._anchor ? ` ah=${f._anchor}` : ''} conf=${f.confidence} sev=${f.severity} sha=${HEAD_SHA} -->`
+      `${f._anchors.length ? ` ah=${f._anchors.join(',')}` : ''} conf=${f.confidence} sev=${f.severity} sha=${HEAD_SHA} -->`
   );
   return parts.join('\n');
 }
@@ -322,7 +322,9 @@ async function main() {
         path: t.path,
         rule,
         bid: /\bbid=([a-z0-9]+)/.exec(body)?.[1] || null,
-        ah: /\bah=([a-z0-9]+)/.exec(body)?.[1] || null,
+        ahs: (/\bah=([a-z0-9,]+)/.exec(body)?.[1] || '')
+          .split(',')
+          .filter(Boolean),
       });
     }
   } catch (err) {
@@ -399,8 +401,9 @@ async function main() {
       openThreads.find(x => x.bid && x.bid === f._bucket) ||
       openThreads.find(x => x.rule === f.ruleId && x.path === f.file);
     if (!t) return null;
-    const anchorGone = t.ah
-      ? !hashesOf(t.path)?.has(t.ah)
+    const hashes = hashesOf(t.path);
+    const anchorGone = t.ahs.length
+      ? !hashes || t.ahs.some(h => !hashes.has(h))
       : t.isOutdated === true;
     return anchorGone ? t : null;
   };
@@ -410,9 +413,9 @@ async function main() {
   const outOfScope = [];
   const reposts = [];
   for (const f of valid) {
-    const { bucket, anchor } = identify(f, sourceFor(f));
+    const { bucket, anchors } = identify(f, sourceFor(f));
     f._bucket = bucket;
-    f._anchor = anchor;
+    f._anchors = anchors;
 
     // Migration: comments posted by older script versions carry no bid, so a
     // (rule, file) match also counts as standing. Coarse, but the coarse side
@@ -644,8 +647,13 @@ function writeResolvePlan({ incomplete, standing, fresh, openThreads, superseded
       // superseded by a re-anchored comment at the code's current location.
       if (t.bid && liveBids.has(t.bid)) continue;
       if (liveRuleFile.has(`${t.rule}|${t.path}`)) continue;
-      // The recorded line content must actually be gone from the file.
-      if (t.ah && hashesFor(t.path)?.has(t.ah)) continue;
+      // The recorded region must have actually changed in the file — every
+      // anchored line still present means nothing was touched, and model
+      // silence alone must not resolve anything.
+      if (t.ahs.length) {
+        const hashes = hashesFor(t.path);
+        if (hashes && t.ahs.every(h => hashes.has(h))) continue;
+      }
 
       plan.push({
         threadId: t.threadId,

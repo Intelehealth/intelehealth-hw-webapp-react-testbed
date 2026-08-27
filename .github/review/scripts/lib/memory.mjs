@@ -96,18 +96,39 @@ export function scopeMap(source) {
  * scope, which is where a same-rule repeat is almost always the same finding.
  */
 export function identify(finding, source) {
-  let anchor = null;
+  let anchors = [];
   let scopeKey = 'file';
   if (source) {
     const lines = source.split('\n');
-    const content = normalizeLine(lines[finding.line - 1] || '');
-    if (content.length >= 6) anchor = hash32(content);
+
+    /*
+     * Anchor a small window, not the single named line: models habitually
+     * point one line off (observed live — TS-002 reported on the `return`
+     * below the actual `message!` line), and an anchor on the wrong line
+     * makes "the flagged code is gone" undecidable. The window runs from one
+     * line above to endLine; a fix that touches ANY of it counts as the
+     * region changing. Resolution still additionally requires the finding to
+     * have stopped being reported, so a stray edit nearby cannot bury a live
+     * defect on its own.
+     */
+    const end = Number.isInteger(finding.endLine)
+      ? Math.max(finding.line, finding.endLine)
+      : finding.line;
+    const from = Math.max(0, finding.line - 2);
+    const to = Math.min(lines.length - 1, end - 1);
+    for (let i = from; i <= to && anchors.length < 4; i++) {
+      const content = normalizeLine(lines[i] || '');
+      if (content.length >= 6) {
+        const h = hash32(content);
+        if (!anchors.includes(h)) anchors.push(h);
+      }
+    }
     const symbol = scopeMap(source)[finding.line - 1];
-    scopeKey = symbol || anchor || 'file';
+    scopeKey = symbol || anchors[0] || 'file';
   }
   return {
     bucket: hash32(`v2|${finding.ruleId}|${finding.file}|${scopeKey}`),
-    anchor,
+    anchors,
   };
 }
 
