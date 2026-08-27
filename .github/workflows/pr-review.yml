@@ -38,6 +38,10 @@ concurrency:
 
 jobs:
   review:
+    outputs:
+      pr_number: ${{ steps.pr.outputs.number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      resolve_plan: ${{ steps.plan.outputs.plan }}
     # Every pull_request event runs this job, including the ones that do no
     # work. A required check must always report, or the PR can never merge.
     runs-on: ubuntu-latest
@@ -196,6 +200,12 @@ jobs:
             "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/labels/review-again" \
             --silent || true
 
+      - name: Expose the resolve plan
+        id: plan
+        if: always() && steps.pr.outputs.mode == 'review'
+        run: |
+          echo "plan=$(jq -c . .claude-review/resolve-plan.json 2>/dev/null || echo '[]')" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifacts
         if: always() && steps.pr.outputs.mode == 'review'
         uses: actions/upload-artifact@v4
@@ -229,3 +239,68 @@ jobs:
           merge unblocked.
           MSG
           exit 1
+
+  # Replies to and resolves the bot's own threads whose findings are provably
+  # fixed. A separate job for one reason: resolveReviewThread needs
+  # `contents: write` (probed 2026-08-27 — `contents: read` returns FORBIDDEN
+  # "Resource not accessible by integration"), and a token that strong must
+  # not share a job with a checkout of PR-authored code or model output. This
+  # job checks nothing out and runs nothing from the PR branch.
+  #
+  # The plan itself is produced by scripts on the PR branch, so it is treated
+  # as untrusted input: every thread id is re-verified against this PR's own
+  # open threads before anything is touched.
+  resolve:
+    needs: review
+    if: >
+      needs.review.outputs.resolve_plan != '' &&
+      needs.review.outputs.resolve_plan != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Reply and resolve fixed threads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.review.outputs.pr_number }}
+          HEAD: ${{ needs.review.outputs.head_sha }}
+          PLAN: ${{ needs.review.outputs.resolve_plan }}
+        run: |
+          set -uo pipefail
+          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
+          printf '%s' "$PLAN" > plan.json
+
+          # The ground truth this job trusts: the open threads on THIS pr.
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){
+              repository(owner:$owner,name:$name){pullRequest(number:$number){
+                reviewThreads(first:100){nodes{id isResolved}}}}}' \
+            -f owner="$OWNER" -f name="$NAME" -F number="$PR" > threads.json \
+            || { echo "Could not list threads; resolving nothing."; exit 0; }
+
+          jq -c '.[]' plan.json | while read -r row; do
+            TID=$(echo "$row" | jq -r .threadId)
+            CID=$(echo "$row" | jq -r .commentId)
+            RULE=$(echo "$row" | jq -r .rule)
+
+            OK=$(jq -r --arg t "$TID" \
+              '[.data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.id == $t and .isResolved == false)] | length' threads.json)
+            if [ "$OK" != "1" ]; then
+              echo "Skipping $RULE: not an open thread of this PR."
+              continue
+            fi
+
+            gh api "repos/$REPO/pulls/$PR/comments/$CID/replies" \
+              -f body="✅ **$RULE** looks fixed as of \`${HEAD:0:7}\` — the flagged code is gone and the finding did not reappear in the latest review. Resolving this thread; unresolve it if you disagree." \
+              >/dev/null && echo "Replied on $RULE."
+
+            gh api graphql \
+              -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' \
+              -f t="$TID" >/dev/null && echo "Resolved $RULE ($TID)."
+          done
+          # This job must never fail a PR check over a courtesy action.
+          exit 0

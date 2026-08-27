@@ -27,8 +27,11 @@ import {
   createReview,
   getPullFiles,
   getReviewComments,
+  getReviews,
+  getReviewThreads,
 } from './lib/github.mjs';
 import { gateFindings } from './lib/gate.mjs';
+import { changedLines, fileLineHashes, identify } from './lib/memory.mjs';
 import { parseRules, SEVERITY_ORDER } from './lib/rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -110,9 +113,16 @@ function commentBody(f) {
    * Suggestions were also most of the paid output tokens.
    */
 
+  /*
+   * fid is the legacy line-keyed id, kept so older script versions on open
+   * branches still recognise the comment. bid is the line-independent v2
+   * identity; ah anchors the flagged line's content so "fixed" can be checked
+   * against the file rather than taken on the model's word.
+   */
   parts.push(
     '',
-    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} conf=${f.confidence} sev=${f.severity} -->`
+    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} bid=${f._bucket}` +
+      `${f._anchor ? ` ah=${f._anchor}` : ''} conf=${f.confidence} sev=${f.severity} sha=${HEAD_SHA} -->`
   );
   return parts.join('\n');
 }
@@ -122,6 +132,7 @@ function summaryBody({
   kept,
   dropped,
   outOfDiff,
+  outOfScope,
   invalid,
   ruleCount,
 }) {
@@ -162,13 +173,30 @@ function summaryBody({
     }
   }
 
+  if (outOfScope.length) {
+    lines.push(
+      '',
+      '<details><summary>' +
+        outOfScope.length +
+        ' finding(s) on code unchanged since the last review — not raised</summary>',
+      '',
+      'These lines were not touched by the commits since the previous review, so no new',
+      'comment was opened for them. They will be raised if that code is ever modified.',
+      ''
+    );
+    for (const f of outOfScope) {
+      lines.push(`- \`${f.ruleId}\` ${f.file}:${f.line} — ${f.title}`);
+    }
+    lines.push('', '</details>');
+  }
+
   const noise = dropped.filter(d => !/already posted/.test(d.reason));
   if (noise.length) {
     lines.push(
       '',
       '<details><summary>' +
         noise.length +
-        ' finding(s) suppressed by the feedback loop</summary>',
+        ' finding(s) below the posting thresholds</summary>',
       ''
     );
     for (const d of noise) {
@@ -195,7 +223,9 @@ function summaryBody({
   lines.push(
     '',
     `<sub>${ruleCount} rules — see \`.github/review/review-rules.md\`.</sub>`,
-    `<!-- ${MARKER} summary -->`
+    // sha records which commit this review read, so the next run can scope
+    // new findings to code changed since — the anti-churn contract.
+    `<!-- ${MARKER} summary sha=${HEAD_SHA} -->`
   );
   return lines.join('\n');
 }
@@ -247,32 +277,138 @@ async function main() {
     `Parsed ${valid.length} valid finding(s), ${invalid.length} discarded.`
   );
 
-  // --- idempotency: what did earlier runs already say? --------------------
+  // --- memory: what did earlier runs already say? --------------------------
+  //
+  // Prior findings are read back from the bot's own comment markers — the PR
+  // is the state store. Only comments authored by a bot count: any human can
+  // quote-reply a marker verbatim, and a forged marker must not suppress a
+  // finding.
   const existing = await getReviewComments(REPO, PR_NUMBER);
-  const alreadyPosted = new Set();
+  const isBot = u => u?.type === 'Bot' || /\[bot\]$/.test(u?.login || '');
+  const priors = [];
   for (const c of existing) {
-    const m = new RegExp(`<!-- ${MARKER} .*?fid=([a-z0-9]+)`).exec(
-      c.body || ''
-    );
-    if (m) alreadyPosted.add(m[1]);
+    if (!isBot(c.user)) continue;
+    const body = c.body || '';
+    if (!body.includes(`<!-- ${MARKER} `)) continue;
+    const rule = /rule=([A-Z]+-\d+)/.exec(body)?.[1];
+    if (!rule) continue;
+    priors.push({
+      rule,
+      file: c.path,
+      bid: /\bbid=([a-z0-9]+)/.exec(body)?.[1] || null,
+    });
   }
-  console.log(`${alreadyPosted.size} finding(s) already posted on this PR.`);
+  console.log(`${priors.length} prior finding(s) recorded on this PR.`);
 
-  // --- gate against learned weights ---------------------------------------
-  const { kept, dropped } = gateFindings(valid, {
-    alreadyPosted,
+  // The commit the last complete review actually read, from the summary
+  // marker. Absent on a first review — then everything is in scope.
+  let lastSha = null;
+  try {
+    for (const review of await getReviews(REPO, PR_NUMBER)) {
+      if (!isBot(review.user)) continue;
+      const m = new RegExp(`<!-- ${MARKER} summary sha=([0-9a-f]{7,40}) -->`).exec(
+        review.body || ''
+      );
+      if (m) lastSha = m[1];
+    }
+  } catch (err) {
+    console.error(`Could not read prior reviews: ${err.message}`);
+  }
+
+  // --- identity + scope classification -------------------------------------
+  //
+  // standing:   already raised on this PR (matched by line-independent
+  //             identity). Not re-posted; still counts against the merge.
+  // fresh:      new finding on code changed since the last review. Posted.
+  // outOfScope: new finding on code NOT touched since the last review.
+  //             Dropped entirely and listed in the summary — a re-review must
+  //             not re-litigate code the developer did not change, or every
+  //             commit mints fresh findings and the PR never converges.
+  //
+  // ranges === null means "cannot tell what changed" (first review, or the
+  // last-reviewed sha is unreachable after a force-push) and fails open to
+  // reviewing everything — never to dropping anything.
+  const priorBids = new Set(priors.map(p => p.bid).filter(Boolean));
+  const priorRuleFile = new Set(priors.map(p => `${p.rule}|${p.file}`));
+  const ranges =
+    lastSha && HEAD_SHA ? changedLines(lastSha, HEAD_SHA) : null;
+  if (lastSha) {
+    console.log(
+      `Last reviewed commit: ${lastSha.slice(0, 7)}. ` +
+        (ranges
+          ? `${ranges.size} file(s) changed since.`
+          : 'git could not diff against it — everything is in scope.')
+    );
+  }
+
+  const sources = new Map();
+  const sourceFor = f => {
+    if (!sources.has(f.file)) {
+      try {
+        sources.set(f.file, readFileSync(f.file, 'utf8'));
+      } catch {
+        sources.set(f.file, null);
+      }
+    }
+    return sources.get(f.file);
+  };
+
+  const standing = [];
+  const fresh = [];
+  const outOfScope = [];
+  for (const f of valid) {
+    const { bucket, anchor } = identify(f, sourceFor(f));
+    f._bucket = bucket;
+    f._anchor = anchor;
+
+    // Migration: comments posted by older script versions carry no bid, so a
+    // (rule, file) match also counts as standing. Coarse, but the coarse side
+    // suppresses a duplicate comment; the fine side reposts forever.
+    if (priorBids.has(bucket) || priorRuleFile.has(`${f.ruleId}|${f.file}`)) {
+      standing.push(f);
+      continue;
+    }
+    if (ranges) {
+      const changed = ranges.get(f.file);
+      const end =
+        Number.isInteger(f.endLine) && f.endLine > f.line ? f.endLine : f.line;
+      let touched = false;
+      if (changed) {
+        for (let ln = f.line; ln <= end && !touched; ln++) {
+          if (changed.has(ln)) touched = true;
+        }
+      }
+      if (!touched) {
+        outOfScope.push(f);
+        continue;
+      }
+    }
+    fresh.push(f);
+  }
+  console.log(
+    `${standing.length} standing, ${fresh.length} new, ${outOfScope.length} out of scope.`
+  );
+  for (const f of outOfScope) {
+    console.log(
+      `   out of scope (code unchanged since last review): ${f.ruleId} ${f.file}:${f.line}`
+    );
+  }
+
+  // --- gate ----------------------------------------------------------------
+  const { kept, dropped } = gateFindings(fresh, {
+    alreadyPosted: new Set(),
   });
   console.log(
     `${kept.length} finding(s) passed the gate, ${dropped.length} dropped.`
   );
 
-  // What is wrong with this PR *right now*, independent of what earlier runs
-  // already said. `kept` excludes anything already posted, so a re-run where
-  // every problem still stands would otherwise look clean and let the merge
-  // through. The merge decision has to be about the code, not about which
-  // comments happen to be new.
-  const { kept: unresolved } = gateFindings(valid, {
+  // What is wrong with this PR *right now*: standing findings plus new ones.
+  // Out-of-scope findings are excluded — blocking a merge on a finding the
+  // developer was never shown is a trap, not a gate. maxComments is lifted
+  // here: the posting cap must never truncate the merge decision.
+  const { kept: unresolved } = gateFindings([...standing, ...fresh], {
     alreadyPosted: new Set(),
+    maxComments: Infinity,
   });
   const blocking = unresolved.filter(
     f => SEVERITY_ORDER[f.severity] <= SEVERITY_ORDER[BLOCK_MIN_SEVERITY]
@@ -322,12 +458,18 @@ async function main() {
     kept,
     dropped,
     outOfDiff,
+    outOfScope,
     invalid,
     ruleCount,
   });
 
-  // Nothing new to say and nothing already said: stay quiet.
-  if (inline.length === 0 && outOfDiff.length === 0 && alreadyPosted.size > 0) {
+  // Whatever else happens, always leave the resolve plan for the follow-up
+  // job — an empty one when the run was incomplete, because "the model did
+  // not look" must never read as "the finding is gone".
+  await writeResolvePlan({ incomplete, standing, fresh });
+
+  // Nothing new to say and something already said: stay quiet.
+  if (inline.length === 0 && outOfDiff.length === 0 && priors.length > 0) {
     console.log('No new findings since the last run. Not posting.');
     applyMergeGate(blocking, incomplete);
     return;
@@ -374,6 +516,71 @@ async function main() {
   }
 
   applyMergeGate(blocking, incomplete);
+}
+
+/**
+ * Decide which of the bot's own threads are provably fixed, and write the
+ * list for the resolve job. This script never resolves anything itself — the
+ * mutation needs a stronger token, which lives in a separate job with no
+ * checkout, so model-adjacent code never runs next to it.
+ *
+ * A thread qualifies only when ALL of the following hold, each mechanical:
+ *   - the run was complete (an unread diff proves nothing about any finding);
+ *   - the bot authored the thread's root comment, and no human has resolved
+ *     or touched its resolution state (isResolved === false);
+ *   - the finding did not reappear in this run under its line-independent
+ *     identity, nor under its (rule, file) pair;
+ *   - the exact line content the comment anchored to is gone from the file
+ *     on disk. Model silence alone is never treated as proof of a fix.
+ *
+ * Anything ambiguous stays open. An open thread on fixed code is one click of
+ * noise; a resolved thread on an unfixed defect is a buried bug.
+ */
+async function writeResolvePlan({ incomplete, standing, fresh }) {
+  const plan = [];
+  if (!incomplete) {
+    const live = [...standing, ...fresh];
+    const liveBids = new Set(live.map(f => f._bucket).filter(Boolean));
+    const liveRuleFile = new Set(live.map(f => `${f.ruleId}|${f.file}`));
+    const hashesByFile = new Map();
+    const hashesFor = path => {
+      if (!hashesByFile.has(path)) hashesByFile.set(path, fileLineHashes(path));
+      return hashesByFile.get(path);
+    };
+
+    try {
+      for (const t of await getReviewThreads(REPO, PR_NUMBER)) {
+        if (t.isResolved) continue;
+        const root = t.comments?.nodes?.[0];
+        const login = root?.author?.login || '';
+        if (!/\[bot\]$|^github-actions$/.test(login)) continue;
+        const body = root.body || '';
+        if (!body.includes(`<!-- ${MARKER} `)) continue;
+
+        const rule = /rule=([A-Z]+-\d+)/.exec(body)?.[1];
+        if (!rule) continue;
+        const bid = /\bbid=([a-z0-9]+)/.exec(body)?.[1];
+        const ah = /\bah=([a-z0-9]+)/.exec(body)?.[1];
+
+        if (bid && liveBids.has(bid)) continue;
+        if (liveRuleFile.has(`${rule}|${t.path}`)) continue;
+        // The recorded line content must actually be gone from the file.
+        if (ah && hashesFor(t.path)?.has(ah)) continue;
+
+        plan.push({
+          threadId: t.id,
+          commentId: root.databaseId,
+          rule,
+          path: t.path,
+        });
+      }
+    } catch (err) {
+      console.error(`Could not compute the resolve plan: ${err.message}`);
+      plan.length = 0;
+    }
+  }
+  writeFileSync('.claude-review/resolve-plan.json', JSON.stringify(plan, null, 2));
+  console.log(`${plan.length} thread(s) queued for resolution.`);
 }
 
 /**
