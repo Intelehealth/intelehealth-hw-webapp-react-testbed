@@ -35,6 +35,7 @@ async function startStub({
   existingComments = [],
   failReview = false,
   threads = [],
+  reviews = [],
 } = {}) {
   const requests = [];
   const server = createServer((req, res) => {
@@ -57,7 +58,7 @@ async function startStub({
         return send(200, [{ filename: 'src/a.ts', patch: PATCH }]);
       }
       if (req.url.startsWith('/repos/acme/app/pulls/7/reviews')) {
-        if (req.method === 'GET') return send(200, []);
+        if (req.method === 'GET') return send(200, reviews);
         return failReview
           ? send(422, { message: 'line must be part of the diff' })
           : send(200, { id: 1 });
@@ -348,6 +349,49 @@ test('a live finding whose thread still anchors real code stays quiet', async ()
     const { stdout } = await runPostReview(findingsPayload([base]), stub);
     assert.match(stdout, /No new findings since the last run/);
     assert.match(stdout, /0 thread\(s\) queued/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('after the round budget, only a blocker opens a new thread', async () => {
+  // Three prior bot review rounds recorded. A major finding on new code is
+  // then advisory-only, so a developer who keeps fixing can actually finish.
+  const priorReviews = [1, 2, 3].map(n => ({
+    id: n,
+    user: { login: 'github-actions[bot]', type: 'Bot' },
+    body: `## IH Tek review\n<!-- ih-tek-review summary sha=abc123${n} -->`,
+  }));
+  const stub = await startStub({ reviews: priorReviews });
+  try {
+    const { stdout } = await runPostReview(
+      findingsPayload([{ ...base, severity: 'major' }]),
+      stub
+    );
+    assert.match(stdout, /deferring 1 non-blocker finding/);
+    const review = stub.requests.find(
+      r => r.method === 'POST' && r.url.includes('/reviews')
+    );
+    assert.equal(review.body.comments.length, 0, 'no new thread is opened');
+    assert.match(review.body.body, /advisory only, not blocking/);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test('a blocker still opens a thread past the round budget', async () => {
+  const priorReviews = [1, 2, 3].map(n => ({
+    id: n,
+    user: { login: 'github-actions[bot]', type: 'Bot' },
+    body: `## IH Tek review\n<!-- ih-tek-review summary sha=abc123${n} -->`,
+  }));
+  const stub = await startStub({ reviews: priorReviews });
+  try {
+    await runPostReview(findingsPayload([base]), stub);
+    const review = stub.requests.find(
+      r => r.method === 'POST' && r.url.includes('/reviews')
+    );
+    assert.equal(review.body.comments.length, 1, 'a blocker is never deferred');
   } finally {
     stub.server.close();
   }
