@@ -32,16 +32,22 @@ export const formatReminderLabel = (reminder: Reminder) => {
   return `${reminder.sendAt} — ${preview}`.trim();
 };
 
-const SCHEDULE_CONCURRENCY = 10;
+const DEFAULT_SCHEDULE_CONCURRENCY = 10;
 
-export const scheduleMany = async (reminders: Reminder[]) => {
+export const scheduleMany = async (
+  reminders: Reminder[],
+  concurrency: number = DEFAULT_SCHEDULE_CONCURRENCY
+) => {
+  const laneCount = Math.max(1, Math.min(concurrency, reminders.length));
   const results: PromiseSettledResult<unknown>[] = new Array(reminders.length);
-  let nextIndex = 0;
 
-  const worker = async () => {
-    while (nextIndex < reminders.length) {
-      const index = nextIndex;
-      nextIndex += 1;
+  /*
+   * Each lane owns a fixed, disjoint set of indices (lane 0 takes 0, N, 2N…),
+   * so no counter is shared between lanes and the work split is decided before
+   * any request starts.
+   */
+  const lane = async (offset: number) => {
+    for (let index = offset; index < reminders.length; index += laneCount) {
       results[index] = await scheduleReminder(reminders[index]).then(
         value => ({ status: 'fulfilled', value }) as const,
         reason => ({ status: 'rejected', reason }) as const
@@ -49,12 +55,7 @@ export const scheduleMany = async (reminders: Reminder[]) => {
     }
   };
 
-  await Promise.all(
-    Array.from(
-      { length: Math.min(SCHEDULE_CONCURRENCY, reminders.length) },
-      worker
-    )
-  );
+  await Promise.all(Array.from({ length: laneCount }, (_, i) => lane(i)));
 
   const failures = results.flatMap(result =>
     result.status === 'rejected' ? [result.reason] : []
