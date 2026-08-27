@@ -21,6 +21,7 @@ import {
   normalizeLine,
   scopeMap,
 } from '../lib/memory.mjs';
+import * as awaitHash from '../lib/gate.mjs';
 
 const HOOK = `import { useEffect, useState } from 'react';
 
@@ -89,12 +90,28 @@ test('two rules on the same line stay distinct findings', () => {
 });
 
 test('a missing source file degrades to a whole-file bucket, never a crash', () => {
-  const { bucket, anchor } = identify(
+  const { bucket, anchors } = identify(
     { ruleId: 'SEC-001', file: 'gone.ts', line: 10 },
     null
   );
   assert.ok(bucket);
-  assert.equal(anchor, null);
+  assert.deepEqual(anchors, []);
+});
+
+test('the anchor window covers the line above, so an off-by-one report still anchors the real code', () => {
+  // Observed live: the model flagged the `return` line below the actual
+  // `message!` offender. The window must include the line above the reported
+  // one so the fix is still detected as touching the region.
+  const src = 'const a = 1;\nconst preview = message!.slice(0, 40);\nreturn `x ${preview}`;\n';
+  const { anchors } = identify(
+    { ruleId: 'TS-002', file: 'x.ts', line: 3 },
+    src
+  );
+  const { hash32 } = awaitHash;
+  assert.ok(
+    anchors.includes(hash32('const preview = message!.slice(0, 40);')),
+    'the line above the reported one must be anchored'
+  );
 });
 
 test('normalizeLine treats reformatting as the same line', () => {
