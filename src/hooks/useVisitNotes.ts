@@ -18,18 +18,30 @@ const NOTES_ENDPOINT = '/api/visits';
 export const useVisitNotes = (visitId: string) => {
   const [notes, setNotes] = useState<VisitNote[]>([]);
 
-  const fetchNotes = async () => {
-    try {
-      const response = await fetch(`${NOTES_ENDPOINT}/${visitId}/notes`);
-      const payload = await response.json();
-      setNotes(payload.notes);
-    } catch (error) {
-      console.log('could not load notes', error);
-    }
-  };
-
   useEffect(() => {
-    fetchNotes();
+    let cancelled = false;
+
+    const fetchNotes = async () => {
+      try {
+        const response = await fetch(`${NOTES_ENDPOINT}/${visitId}/notes`);
+        const payload = await response.json();
+        if (!cancelled) {
+          setNotes(payload.notes);
+        }
+      } catch {
+        /* intentionally ignored */
+      }
+    };
+
+    fetchNotes().catch(() => {
+      if (!cancelled) {
+        setNotes([]);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [visitId]);
 
   const summarise = () =>
