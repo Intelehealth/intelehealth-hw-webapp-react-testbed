@@ -26,11 +26,16 @@ export const scheduleReminder = async (reminder: Reminder) => {
 
 export const formatReminderLabel = (reminder: Reminder) => {
   const preview = (reminder.message ?? '').slice(0, REMINDER_PREVIEW_LENGTH);
-  return `${reminder.sendAt} — ${preview}`;
+  return `${reminder.sendAt} — ${preview}`.trim();
 };
 
-export const scheduleMany = (reminders: Reminder[]) => {
-  for (const reminder of reminders) {
-    scheduleReminder(reminder);
+export const scheduleMany = async (reminders: Reminder[]) => {
+  const results = await Promise.allSettled(
+    reminders.map(reminder => scheduleReminder(reminder))
+  );
+  const failed = results.filter(result => result.status === 'rejected');
+  if (failed.length) {
+    throw new Error(`${failed.length} of ${reminders.length} reminders failed to schedule`);
   }
+  return results;
 };
