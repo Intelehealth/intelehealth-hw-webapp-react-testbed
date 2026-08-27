@@ -30,7 +30,7 @@ import {
   getReviews,
   getReviewThreads,
 } from './lib/github.mjs';
-import { gateFindings } from './lib/gate.mjs';
+import { findingId, gateFindings } from './lib/gate.mjs';
 import { changedLines, fileLineHashes, identify } from './lib/memory.mjs';
 import { parseRules, SEVERITY_ORDER } from './lib/rules.mjs';
 
@@ -121,7 +121,7 @@ function commentBody(f) {
    */
   parts.push(
     '',
-    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid} bid=${f._bucket}` +
+    `<!-- ${MARKER} rule=${f.ruleId} fid=${f._fid ?? findingId(f)} bid=${f._bucket}` +
       `${f._anchors.length ? ` ah=${f._anchors.join(',')}` : ''} conf=${f.confidence} sev=${f.severity} sha=${HEAD_SHA} -->`
   );
   return parts.join('\n');

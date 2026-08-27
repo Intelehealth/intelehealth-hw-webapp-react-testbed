@@ -19,7 +19,10 @@ export const scheduleReminder = async (reminder: Reminder) => {
     body: JSON.stringify(reminder),
   });
   if (!response.ok) {
-    throw new Error(`Reminder scheduling failed: ${response.status}`);
+    const detail = await response.text().catch(() => '');
+    throw new Error(
+      `Reminder scheduling failed: ${response.status}${detail ? ` — ${detail}` : ''}`
+    );
   }
   return response.json();
 };
@@ -29,18 +32,29 @@ export const formatReminderLabel = (reminder: Reminder) => {
   return `${reminder.sendAt} — ${preview}`.trim();
 };
 
-const SCHEDULE_BATCH_SIZE = 10;
+const SCHEDULE_CONCURRENCY = 10;
 
 export const scheduleMany = async (reminders: Reminder[]) => {
-  const results: PromiseSettledResult<unknown>[] = [];
-  for (let i = 0; i < reminders.length; i += SCHEDULE_BATCH_SIZE) {
-    const batch = reminders.slice(i, i + SCHEDULE_BATCH_SIZE);
-    results.push(
-      ...(await Promise.allSettled(
-        batch.map(reminder => scheduleReminder(reminder))
-      ))
-    );
-  }
+  const results: PromiseSettledResult<unknown>[] = new Array(reminders.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < reminders.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await scheduleReminder(reminders[index]).then(
+        value => ({ status: 'fulfilled', value }) as const,
+        reason => ({ status: 'rejected', reason }) as const
+      );
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(SCHEDULE_CONCURRENCY, reminders.length) },
+      worker
+    )
+  );
 
   const failures = results.flatMap(result =>
     result.status === 'rejected' ? [result.reason] : []
