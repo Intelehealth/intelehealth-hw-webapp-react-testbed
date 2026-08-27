@@ -151,6 +151,46 @@ export async function getReviewComments(repo, prNumber) {
   return restAll(`/repos/${repo}/pulls/${prNumber}/comments`, { max: 500 });
 }
 
+/** Reviews on a PR (their bodies carry the bot's summary markers). */
+export async function getReviews(repo, prNumber) {
+  return restAll(`/repos/${repo}/pulls/${prNumber}/reviews`, { max: 200 });
+}
+
+/**
+ * Review threads on a PR, with resolution state and the root comment of each.
+ * GraphQL because REST has no notion of a thread, only of comments.
+ */
+export async function getReviewThreads(repo, prNumber) {
+  const [owner, name] = repo.split('/');
+  const query = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id isResolved isOutdated path
+            comments(first: 1) { nodes { databaseId author { login } body } }
+          }
+        }
+      }
+    }
+  }`;
+  const nodes = [];
+  let cursor = null;
+  do {
+    const data = await graphql(query, {
+      owner,
+      name,
+      number: Number(prNumber),
+      cursor,
+    });
+    const threads = data.repository.pullRequest.reviewThreads;
+    nodes.push(...threads.nodes);
+    cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+  } while (cursor);
+  return nodes;
+}
+
 /** Reactions on a single PR review comment. */
 export async function getCommentReactions(repo, commentId) {
   return restAll(`/repos/${repo}/pulls/comments/${commentId}/reactions`, {
