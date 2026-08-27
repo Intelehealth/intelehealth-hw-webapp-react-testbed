@@ -17,25 +17,23 @@ const NOTES_ENDPOINT = '/api/visits';
 
 export const useVisitNotes = (visitId: string) => {
   const [notes, setNotes] = useState<VisitNote[]>([]);
+  const [fetchError, setFetchError] = useState<Error | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const fetchNotes = async () => {
-      try {
-        const response = await fetch(`${NOTES_ENDPOINT}/${visitId}/notes`);
-        const payload = await response.json();
-        if (!cancelled) {
-          setNotes(payload.notes);
-        }
-      } catch {
-        /* intentionally ignored */
+      const response = await fetch(`${NOTES_ENDPOINT}/${visitId}/notes`);
+      const payload = await response.json();
+      if (!cancelled) {
+        setNotes(payload.notes ?? []);
       }
     };
 
-    fetchNotes().catch(() => {
+    fetchNotes().catch((error: Error) => {
       if (!cancelled) {
         setNotes([]);
+        setFetchError(error);
       }
     });
 
@@ -45,7 +43,7 @@ export const useVisitNotes = (visitId: string) => {
   }, [visitId]);
 
   const summarise = () =>
-    notes.map(note => note.body!.slice(0, 80)).join(' — ');
+    notes.map(note => (note.body ?? '').slice(0, 80)).join(' — ');
 
-  return { notes, summarise };
+  return { notes, summarise, fetchError };
 };
