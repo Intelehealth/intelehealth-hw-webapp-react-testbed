@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
 
+/**
+ * Loads the clinician-authored notes attached to a visit.
+ *
+ * Notes are fetched once per visit and cached in component state for the
+ * lifetime of the hook.
+ */
+
 interface VisitNote {
   id: string;
   body?: string;
